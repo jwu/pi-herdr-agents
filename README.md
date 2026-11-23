@@ -23,11 +23,15 @@ For a local checkout, run `pi -e .` from the repository directory inside an hc t
 
 | Tool | Usage |
 | --- | --- |
-| `hc_run` | Pass `name`, `task`, and an optional `cwd` to launch a child agent from the current terminal. The first task is delivered once Pi is idle. |
+| `hc_run` | Pass `name`, `task`, and optionally `cwd` and `labels` to launch a child agent from the current terminal. The first task is delivered once Pi is idle. |
 | `hc_agents` | List the hc addresses and statuses of the current agent, its parent, its direct children, and its siblings. Set `include_finished` to include finished children and siblings. |
 | `hc_send` | Pass a `message`. Omit `target` to send it to the parent, or provide the address of a direct child or sibling. If Pi is working, it receives the message as a steering message. |
 | `hc_wait` | Wait for a specific `target`, or set `children` to `"any"` or `"all"` to wait for direct child terminals reported by hc. An incoming message or a timeout can end the wait early. |
-| `hc_manage` | Use `read`, `interrupt`, `kill`, or `rm` on a direct child agent you launched. `rm` only removes finished terminals. |
+| `hc_read` | Read terminal output from a managed direct child by `target`. Optional `lines` defaults to 40 with a range of 0–200. |
+| `hc_stop` | Pass a managed direct child’s `target` and an `action`. `interrupt` stops its current turn and `kill` ends its program. |
+| `hc_rm` | Remove a managed direct child’s finished terminal by `target`. |
+
+Pass `labels` as a map of string values, such as `{"role":"reviewer","project":"docs"}`. Each entry becomes a separate `hc run --label key=value` argument. The extension reserves the `pi-herdr-agents` key for discovering its agents. Herdr Core treats an empty value as removing that label.
 
 For example, ask the parent agent to delegate code review and testing to two subagents. They can find each other with `hc_agents`, exchange findings with `hc_send`, and report back to the parent when they finish or get blocked. You can open any terminal with `hc attach <address>`.
 

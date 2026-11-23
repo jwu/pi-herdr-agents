@@ -45,6 +45,13 @@ export function registerHcTools(
 ) {
   const client = (signal?: AbortSignal) => new HcClient(pi.exec.bind(pi), signal);
 
+  async function directChild(hc: HcClient, target: string) {
+    const { children } = await hc.family(address);
+    const child = children.find((terminal) => terminal.address === target);
+    if (!child) throw new Error(`${target} is not a managed direct child.`);
+    return child;
+  }
+
   pi.registerTool({
     name: 'hc_agents',
     label: 'HC Agents',
@@ -86,9 +93,24 @@ export function registerHcTools(
           description: 'Directory relative to the current Pi workspace, or an absolute path.',
         }),
       ),
+      labels: Type.Optional(
+        Type.Record(
+          Type.String({ pattern: '^[^=\\x00]+$' }),
+          Type.String({ pattern: '^[^\\x00]*$' }),
+          {
+            additionalProperties: false,
+            description:
+              'Custom label keys and string values. The pi-herdr-agents key is reserved.',
+          },
+        ),
+      ),
     }),
-    async execute(_id, { name, task, cwd }, signal, _onUpdate, ctx) {
+    async execute(_id, { name, task, cwd, labels = {} }, signal, _onUpdate, ctx) {
       const message = text(task);
+      const labelArgs = Object.entries(labels).flatMap(([key, value]) => {
+        if (agentLabel.startsWith(`${key}=`)) throw new Error(`Label key "${key}" is reserved.`);
+        return ['--label', `${key}=${value}`];
+      });
       const hc = client(signal);
       const lookup = await pi.exec(process.platform === 'win32' ? 'where.exe' : 'which', ['pi'], {
         signal,
@@ -101,12 +123,14 @@ export function registerHcTools(
 
       const terminal = await hc.run([
         '--bg',
+        '--no-notify',
         '--name',
         name,
         '--cwd',
         resolve(ctx.cwd, cwd ?? '.'),
         '--label',
         agentLabel,
+        ...labelArgs,
         '--parent',
         address,
         '--',
@@ -138,7 +162,7 @@ export function registerHcTools(
           first_message: {
             sent: false,
             reason:
-              'Pi did not reach idle. Inspect the existing terminal with hc_manage before sending the task.',
+              'Pi did not reach idle. Inspect the existing terminal with hc_read before sending the task.',
           },
         });
       }
@@ -201,35 +225,52 @@ export function registerHcTools(
   });
 
   pi.registerTool({
-    name: 'hc_manage',
-    label: 'HC Manage Child',
-    description:
-      'Read a managed direct child’s terminal, interrupt its turn, kill its program, or remove its finished terminal.',
+    name: 'hc_read',
+    label: 'HC Read Child',
+    description: 'Read terminal output from a managed direct child.',
     parameters: Type.Object({
       target: addressParam,
-      action: Type.Union([
-        Type.Literal('read'),
-        Type.Literal('interrupt'),
-        Type.Literal('kill'),
-        Type.Literal('rm'),
-      ]),
       lines: Type.Optional(
         Type.Integer({
           minimum: 0,
           maximum: 200,
-          description: 'History lines for read. Defaults to 40.',
+          description: 'History lines to read. Defaults to 40.',
         }),
       ),
     }),
-    async execute(_id, { target, action, lines = 40 }, signal) {
+    async execute(_id, { target, lines = 40 }, signal) {
       const hc = client(signal);
-      const { children } = await hc.family(address);
-      const child = children.find((terminal) => terminal.address === target);
-      if (!child) throw new Error(`${target} is not a managed direct child.`);
-      if (action === 'rm' && child.state !== 'finished')
-        throw new Error('Only finished terminals can be removed.');
-      const args = action === 'read' ? ['--lines', String(lines)] : [];
-      return result(await hc.command(action, [...args, '--', child.address]));
+      const child = await directChild(hc, target);
+      return result(await hc.command('read', ['--lines', String(lines), '--', child.address]));
+    },
+  });
+
+  pi.registerTool({
+    name: 'hc_stop',
+    label: 'HC Stop Child',
+    description:
+      'Use interrupt to stop a managed direct child’s current turn, or kill to end its program.',
+    parameters: Type.Object({
+      target: addressParam,
+      action: Type.Union([Type.Literal('interrupt'), Type.Literal('kill')]),
+    }),
+    async execute(_id, { target, action }, signal) {
+      const hc = client(signal);
+      const child = await directChild(hc, target);
+      return result(await hc.command(action, ['--', child.address]));
+    },
+  });
+
+  pi.registerTool({
+    name: 'hc_rm',
+    label: 'HC Remove Child Terminal',
+    description: 'Remove a managed direct child’s finished terminal.',
+    parameters: Type.Object({ target: addressParam }),
+    async execute(_id, { target }, signal) {
+      const hc = client(signal);
+      const child = await directChild(hc, target);
+      if (child.state !== 'finished') throw new Error('Only finished terminals can be removed.');
+      return result(await hc.command('rm', ['--', child.address]));
     },
   });
 }
