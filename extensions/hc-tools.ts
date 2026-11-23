@@ -170,6 +170,11 @@ export function registerHcTools(
         throw new Error('Could not find the Pi executable on PATH.');
       }
 
+      // HC starts terminals with the server environment. Pi launchers use PATH to find Node.
+      const command =
+        process.platform !== 'win32' && process.env.PATH
+          ? ['/usr/bin/env', `PATH=${process.env.PATH}`, executable]
+          : [executable];
       const terminal = await hc.run([
         '--bg',
         '--no-notify',
@@ -183,7 +188,7 @@ export function registerHcTools(
         '--parent',
         address,
         '--',
-        executable,
+        ...command,
         '-e',
         extensionPath,
         ...(await childPiArgs(profile, scope)),

@@ -104,6 +104,9 @@ test('hc_run launches an interactive child and waits for idle before sending its
       '--parent',
       't2',
       '--',
+      ...(process.platform !== 'win32' && process.env.PATH
+        ? ['/usr/bin/env', `PATH=${process.env.PATH}`]
+        : []),
       executable,
       '-e',
       '/package/extensions/index.ts',
