@@ -189,15 +189,9 @@ test('hc_send routes to the parent and managed peers, and rejects unrelated term
           return stdout({ ...sibling, status: { app: 'pi', state: siblingState } });
         }
         return stdout(terminals.find((terminal) => terminal.address === args.at(-1)));
-      case 'ls': {
-        const label = args.at(-1);
-        expect(args.slice(0, -1)).toEqual(['ls', '--json', '--all', '--label']);
-        if (label === 'pi-herdr-agents=agent')
-          return stdout({ terminals: [self, child, newChild] });
-        if (label === 'pi-herdr-core=agent')
-          return stdout({ terminals: [sibling, unrelated, child] });
-        throw new Error(`Unexpected label ${label}`);
-      }
+      case 'ls':
+        expect(args).toEqual(['ls', '--json', '--all', '--label', 'pi-herdr-agents=agent']);
+        return stdout({ terminals });
       case 'send':
         sends.push(args);
         if (args.at(-2) === 't3' && args.includes('--if')) {
