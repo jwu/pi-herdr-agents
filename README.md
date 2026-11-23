@@ -25,6 +25,7 @@ For a local checkout, run `pi -e .` from the repository directory inside an hc t
 | --- | --- |
 | `hc_run` | Pass `name`, `task`, and optionally `cwd` and `labels` to launch a child agent from the current terminal. The first task is delivered once Pi is idle. |
 | `hc_agents` | List the hc addresses and statuses of the current agent, its parent, its direct children, and its siblings. Set `include_finished` to include finished children and siblings. |
+| `hc_ls` | List live terminals visible to Herdr Core, including terminals on connected machines. Set `include_finished` to add finished terminals. Returns the JSON from `hc ls`. |
 | `hc_send` | Pass a `message`. Omit `target` to send it to the parent, or provide the address of a direct child or sibling. If Pi is working, it receives the message as a steering message. |
 | `hc_wait` | Wait for a specific `target`, or set `children` to `"any"` or `"all"` to wait for direct child terminals reported by hc. An incoming message or a timeout can end the wait early. |
 | `hc_read` | Read terminal output from a managed direct child by `target`. Optional `lines` defaults to 40 with a range of 0–200. |

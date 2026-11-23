@@ -73,6 +73,18 @@ export function registerHcTools(
   });
 
   pi.registerTool({
+    name: 'hc_ls',
+    label: 'HC List Terminals',
+    description:
+      'List terminals visible to Herdr Core, including those outside this Pi agent’s family.',
+    promptSnippet: 'List terminals visible to Herdr Core.',
+    parameters: Type.Object({ include_finished: Type.Optional(Type.Boolean()) }),
+    async execute(_id, { include_finished = false }, signal) {
+      return result(await client(signal).command('ls', include_finished ? ['--all'] : []));
+    },
+  });
+
+  pi.registerTool({
     name: 'hc_run',
     label: 'HC Run Pi',
     description:

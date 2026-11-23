@@ -40,6 +40,27 @@ function stdout(data: unknown) {
   return { stdout: JSON.stringify(data), stderr: '', code: 0, killed: false, truncated: false };
 }
 
+test('hc_ls returns the CLI listing and includes finished terminals on request', async () => {
+  const finished = { ...unrelated, state: 'finished' };
+  const liveListing = { terminals: [unrelated], hidden_finished: 1 };
+  const allListing = { terminals: [unrelated, finished], hidden_finished: 0 };
+  const calls: string[][] = [];
+  const invoke = register(async (command, args) => {
+    expect(command).toBe('hc');
+    calls.push(args);
+    return stdout(args.includes('--all') ? allListing : liveListing);
+  });
+
+  expect((await invoke('hc_ls', {})).details).toEqual(liveListing);
+  expect((await invoke('hc_ls', { include_finished: false })).details).toEqual(liveListing);
+  expect((await invoke('hc_ls', { include_finished: true })).details).toEqual(allListing);
+  expect(calls).toEqual([
+    ['ls', '--json'],
+    ['ls', '--json'],
+    ['ls', '--json', '--all'],
+  ]);
+});
+
 test('hc_run launches an interactive child and waits for idle before sending its task', async () => {
   const calls: string[][] = [];
   const invoke = register(async (command, args) => {
