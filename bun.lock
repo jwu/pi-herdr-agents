@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "pi-herdr-core",
+      "name": "pi-herdr-agents",
       "devDependencies": {
         "@earendil-works/pi-coding-agent": "^1.6.0",
         "@types/bun": "^1.3.0",

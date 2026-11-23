@@ -1,35 +1,43 @@
-# pi-herdr-core
+# pi-herdr-agents
 
-在 Herdr Core（`hc`）终端内，用 Pi 启动交互式子代理、派发任务、互传消息和管理子终端。
+Launch interactive Pi subagents in Herdr Core, delegate tasks, exchange messages, and manage child terminals.
 
-## 使用
+## Installation
 
-需要 `hc` 0.1.21 或更新版本、Pi 1.6 或更新版本，并且 `hc` 和 `pi` 都在 Pi 的 `PATH` 上。先配置 Pi 的模型，再在本项目目录启动父代理。
+You need Herdr Core (`hc`) 0.1.21 or later and Pi 1.6 or later. Make sure `hc` and `pi` are on Pi's `PATH`, and configure a model in Pi before starting the parent agent.
 
 ```sh
-hc run --bg --name pi-lead -- "$(command -v pi)" -e "$PWD"
+pi install git:github.com/jwu/pi-herdr-agents
+```
+
+## Usage
+
+Start Pi in a Herdr Core terminal and attach to it.
+
+```sh
+hc run --bg --name pi-lead -- "$(command -v pi)"
 hc attach pi-lead
 ```
 
-如果 Pi 已在 hc 终端内，可以用 `pi -e .` 加载本项目，或用 `pi install .` 将其加入 Pi 的包配置。工具在存在 `HC_TERMINAL_ID` 时注册。`hc_run` 会给新 Pi 显式加载同一个扩展，并使用子进程自身的模型配置。
+For a local checkout, run `pi -e .` from the repository directory inside an hc terminal, or run `pi install .` to add the checkout to Pi's package settings. The extension registers its tools when `HC_TERMINAL_ID` is set. `hc_run` explicitly loads the same extension in the child Pi process, which uses its own model configuration.
 
-| 工具 | 用法 |
+| Tool | Usage |
 | --- | --- |
-| `hc_run` | 传入 `name`、`task` 和可选的 `cwd`，创建当前终端的子代理。Pi 空闲后才投递首条任务。 |
-| `hc_agents` | 查看自己、父代理、直接子代理和同级代理的 hc 地址与状态。`include_finished` 可列出已结束的子代理和同级代理。 |
-| `hc_send` | 传入 `message`。省略 `target` 时发给父代理，填地址时可发给直接子代理或同级代理。运行中的 Pi 会把它当作引导消息。 |
-| `hc_wait` | 等待指定 `target`，或用 `children: "any"` / `"all"` 等待 hc 报告的直接子终端。收到新消息或达到超时都可能提前返回。 |
-| `hc_manage` | 对自己启动的直接子代理执行 `read`、`interrupt`、`kill` 或 `rm`。`rm` 只移除已结束的终端。 |
+| `hc_run` | Pass `name`, `task`, and an optional `cwd` to launch a child agent from the current terminal. The first task is delivered once Pi is idle. |
+| `hc_agents` | List the hc addresses and statuses of the current agent, its parent, its direct children, and its siblings. Set `include_finished` to include finished children and siblings. |
+| `hc_send` | Pass a `message`. Omit `target` to send it to the parent, or provide the address of a direct child or sibling. If Pi is working, it receives the message as a steering message. |
+| `hc_wait` | Wait for a specific `target`, or set `children` to `"any"` or `"all"` to wait for direct child terminals reported by hc. An incoming message or a timeout can end the wait early. |
+| `hc_manage` | Use `read`, `interrupt`, `kill`, or `rm` on a direct child agent you launched. `rm` only removes finished terminals. |
 
-可以让父代理分别委派代码审查和测试任务，给两个子代理各自的职责。子代理通过 `hc_agents` 发现同级地址，再用 `hc_send` 直接同步发现，并在完成或遇到阻塞时向父代理回报。用户可用 `hc attach <地址>` 进入任一终端。
+For example, ask the parent agent to delegate code review and testing to two subagents. They can find each other with `hc_agents`, exchange findings with `hc_send`, and report back to the parent when they finish or get blocked. You can open any terminal with `hc attach <address>`.
 
-消息通过 hc 投递到 Pi 的输入区。发送成功表示 hc 已投递，`started` 表示 hc 是否观察到新一轮工作。如果 `hc_run` 返回 `first_message.sent: false` 或 `null`，或观察到 `started: false`，先按返回地址查看终端。启动时的授权界面需要用户处理。若工具在发送期间被取消，可用 `hc_agents` 按名称找回已启动的终端。
+Herdr Core delivers messages through Pi's input area. A successful send means hc delivered the message. The `started` field indicates whether hc observed a new turn. If `hc_run` returns `first_message.sent` as `false` or `null`, or `started` is `false`, inspect the terminal at the returned address. Respond to any approval prompt shown at startup. If the tool is canceled during delivery, use `hc_agents` to find the launched terminal by name.
 
-子代理默认随父终端中的程序退出。当前工具围绕同一个 hc Core 内的代理协作。
+By default, child agents exit when the program in their parent terminal exits. The tools operate within a single Herdr Core instance.
 
-## 本地开发
+## Local development
 
-需要 Node.js 22.19 或更新版本和 Bun。
+You need Node.js 22.19 or later and Bun.
 
 ```sh
 bun install
@@ -37,8 +45,8 @@ bun run lint
 bun test
 ```
 
-## 项目结构
+## Project structure
 
-- `extensions/index.ts` 是 Pi 扩展唯一入口。
-- `extensions/hc-tools.ts` 注册工具，`extensions/hc-client.ts` 执行 hc 命令并解析终端关系。
-- `tests/` 存放 Pi 包加载与工具行为测试。
+- `extensions/index.ts` is the sole Pi extension entry point.
+- `extensions/hc-tools.ts` registers the tools, and `extensions/hc-client.ts` runs hc commands and resolves terminal relationships.
+- `tests/` covers Pi package loading and tool behavior.

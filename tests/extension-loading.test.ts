@@ -7,7 +7,7 @@ import { DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-codin
 
 test('Pi loads the extension from the package manifest', async () => {
   const packageDir = fileURLToPath(new URL('../', import.meta.url));
-  const agentDir = await mkdtemp(join(tmpdir(), 'pi-herdr-core-'));
+  const agentDir = await mkdtemp(join(tmpdir(), 'pi-herdr-agents-'));
 
   try {
     const loader = new DefaultResourceLoader({

@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
+// Keep terminals created before the package rename discoverable.
 export const agentLabel = 'pi-herdr-core=agent';
 
 interface ListedTerminal {
