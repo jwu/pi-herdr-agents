@@ -4,6 +4,9 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { registerHcTools } from '../extensions/hc-tools.ts';
 
 const workspace = process.cwd();
@@ -18,7 +21,7 @@ const sibling = { ...self, address: 't3', agent: 'pi', status: 'done' };
 const unrelated = { ...sibling, address: 't4', parent: 't8' };
 const child = { ...self, address: 't5', parent: self.address };
 
-function register(exec: ExtensionAPI['exec']) {
+function register(exec: ExtensionAPI['exec'], cwd = workspace) {
   const tools = new Map<string, ToolDefinition>();
   registerHcTools(
     {
@@ -31,9 +34,7 @@ function register(exec: ExtensionAPI['exec']) {
     '/package/extensions/index.ts',
   );
   return (name: string, params: Record<string, unknown>) =>
-    tools
-      .get(name)!
-      .execute('test', params, undefined, undefined, { cwd: workspace } as ExtensionToolContext);
+    tools.get(name)!.execute('test', params, undefined, undefined, { cwd } as ExtensionToolContext);
 }
 
 function stdout(data: unknown) {
@@ -123,6 +124,66 @@ test('hc_run launches an interactive child and waits for idle before sending its
     terminal: { address: 't5' },
     first_message: { sent: true, started: true },
   });
+});
+
+test('hc_run resolves an agent in the parent workspace and enables the HC reporting tools', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));
+  try {
+    const agents = join(cwd, '.pi', 'agents');
+    await mkdir(agents, { recursive: true });
+    const profile = join(agents, 'profile.md');
+    await writeFile(
+      profile,
+      [
+        '---',
+        'name: hc-test-reviewer',
+        'systemPrompt: replace-all',
+        'model: test/model',
+        'thinking: high',
+        'tools: read, subagent',
+        'maxDepth: 0',
+        '---',
+        'Review the changes.',
+      ].join('\n'),
+    );
+    const invoke = register(async (command, args) => {
+      if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+      if (args[0] === 'run') {
+        const flag = args.indexOf('--hc-agent-profile');
+        expect(JSON.parse(args[flag + 1])).toMatchObject({
+          filePath: profile,
+          depth: 1,
+          maxDepth: 0,
+        });
+        expect(args.slice(flag + 2)).toEqual([
+          '--exclude-tools',
+          'hc_run',
+          '--no-context-files',
+          '--model',
+          'test/model',
+          '--thinking',
+          'high',
+          '--tools',
+          'read,hc_run,hc_send,hc_agents',
+        ]);
+        expect(args[args.indexOf('--cwd') + 1]).toBe(join(cwd, 'child'));
+        return stdout(child);
+      }
+      if (args[0] === 'wait') return stdout({});
+      if (args[0] === 'get') return stdout({ ...child, status: { app: 'pi', state: 'idle' } });
+      if (args[0] === 'send') return stdout({ started: true, turn: 1 });
+      throw new Error(`Unexpected ${args[0]}`);
+    }, cwd);
+    const output = await invoke('hc_run', {
+      name: 'review',
+      agent: 'hc-test-reviewer',
+      task: 'Review the change',
+      cwd: 'child',
+    });
+    expect(output.details).toMatchObject({ first_message: { sent: true } });
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
 
 test('hc_run preserves the child address when startup is blocked', async () => {

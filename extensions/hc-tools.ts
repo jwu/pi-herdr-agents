@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { isAbsolute, resolve } from 'node:path';
 import { Type } from 'typebox';
+import { loadAgentDefinitions, type AgentProfile } from '@johnnywu/pi-agent-profiles';
+import { childPiArgs, type AgentScope } from './agent-profiles.ts';
 import { agentLabel, HcClient, summarizeTerminal } from './hc-client.ts';
 
 const addressParam = Type.String({
@@ -42,6 +44,7 @@ export function registerHcTools(
   pi: Pick<ExtensionAPI, 'exec' | 'registerTool'>,
   address: string,
   extensionPath: string,
+  getScope?: () => AgentScope | undefined,
 ) {
   const client = (signal?: AbortSignal) => new HcClient(pi.exec.bind(pi), signal);
 
@@ -99,6 +102,12 @@ export function registerHcTools(
         pattern: '^[a-z0-9_-]{1,32}$',
         description: 'Unique live terminal name.',
       }),
+      agent: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description: 'Agent name from .pi/agents or the Pi user agents directory.',
+        }),
+      ),
       task: messageParam,
       cwd: Type.Optional(
         Type.String({
@@ -117,8 +126,36 @@ export function registerHcTools(
         ),
       ),
     }),
-    async execute(_id, { name, task, cwd, labels = {} }, signal, _onUpdate, ctx) {
+    async execute(_id, { name, agent, task, cwd, labels = {} }, signal, _onUpdate, ctx) {
       const message = text(task);
+      const scope = getScope?.();
+      if (scope?.maxDepth !== undefined && scope.depth > scope.maxDepth) {
+        throw new Error('This HC agent has reached its delegation depth limit.');
+      }
+      if (scope?.allowedAgents && (!agent || !scope.allowedAgents.includes(agent))) {
+        throw new Error(
+          `Choose an allowed HC agent: ${scope.allowedAgents.join(', ') || '(none)'}.`,
+        );
+      }
+
+      let profile: AgentProfile | undefined;
+      if (agent !== undefined) {
+        const { agents, warnings } = await loadAgentDefinitions({ cwd: ctx.cwd });
+        profile = agents.find((candidate) => candidate.name === agent);
+        if (!profile) {
+          const available = agents
+            .filter(({ name }) => !scope?.allowedAgents || scope.allowedAgents.includes(name))
+            .map(({ name, description }) => (description ? `${name} (${description})` : name))
+            .sort()
+            .join(', ');
+          throw new Error(
+            [
+              `Unknown HC agent: ${agent}. Available agents: ${available || '(none)'}.`,
+              ...warnings.map(({ filePath, message }) => `${filePath}: ${message}`),
+            ].join('\n'),
+          );
+        }
+      }
       const labelArgs = Object.entries(labels).flatMap(([key, value]) => {
         if (agentLabel.startsWith(`${key}=`)) throw new Error(`Label key "${key}" is reserved.`);
         return ['--label', `${key}=${value}`];
@@ -149,6 +186,7 @@ export function registerHcTools(
         executable,
         '-e',
         extensionPath,
+        ...(await childPiArgs(profile, scope)),
       ]);
       const child = terminal.address;
       const initialTask = [
