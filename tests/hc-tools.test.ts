@@ -1,0 +1,179 @@
+import { expect, test } from 'bun:test';
+import type {
+  ExtensionAPI,
+  ExtensionToolContext,
+  ToolDefinition,
+} from '@earendil-works/pi-coding-agent';
+import { registerHcTools } from '../extensions/hc-tools.ts';
+
+const workspace = process.cwd();
+const executable = process.execPath;
+const self = { address: 't2', parent: 't1', state: 'live' };
+const parent = {
+  address: 't1',
+  state: 'live',
+  status: { app: 'pi', state: 'working' },
+};
+const sibling = { ...self, address: 't3', agent: 'pi', status: 'done' };
+const unrelated = { ...sibling, address: 't4', parent: 't8' };
+const child = { ...self, address: 't5', parent: self.address };
+
+function register(exec: ExtensionAPI['exec']) {
+  const tools = new Map<string, ToolDefinition>();
+  registerHcTools(
+    {
+      exec,
+      registerTool(tool) {
+        tools.set(tool.name, tool as ToolDefinition);
+      },
+    },
+    self.address,
+    '/package/extensions/index.ts',
+  );
+  return (name: string, params: Record<string, unknown>) =>
+    tools
+      .get(name)!
+      .execute('test', params, undefined, undefined, { cwd: workspace } as ExtensionToolContext);
+}
+
+function stdout(data: unknown) {
+  return { stdout: JSON.stringify(data), stderr: '', code: 0, killed: false, truncated: false };
+}
+
+test('hc_run launches an interactive child and waits for idle before sending its task', async () => {
+  const calls: string[][] = [];
+  const invoke = register(async (command, args) => {
+    if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+    calls.push(args);
+    switch (args[0]) {
+      case 'run':
+        return stdout(child);
+      case 'wait':
+        return stdout({ reason: 'status', status: 'idle' });
+      case 'get':
+        return stdout({ ...child, status: { app: 'pi', state: 'idle' } });
+      case 'send':
+        return stdout({ started: true, turn: 0 });
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+  const output = await invoke('hc_run', { name: 'review', task: '-p @notes\nReview this' });
+  expect(calls).toEqual([
+    [
+      'run',
+      '--json',
+      '--bg',
+      '--name',
+      'review',
+      '--cwd',
+      workspace,
+      '--label',
+      'pi-herdr-core=agent',
+      '--parent',
+      't2',
+      '--',
+      executable,
+      '-e',
+      '/package/extensions/index.ts',
+    ],
+    ['wait', '--json', '--timeout', '30', '--', 't5'],
+    ['get', '--json', '--', 't5'],
+    [
+      'send',
+      '--json',
+      '--if',
+      'idle',
+      '--',
+      't5',
+      expect.stringContaining('-p @notes\nReview this'),
+    ],
+  ]);
+  expect(output.details).toMatchObject({
+    terminal: { address: 't5' },
+    first_message: { sent: true, started: true },
+  });
+});
+
+test('hc_run preserves the child address when startup is blocked', async () => {
+  const invoke = register(async (command, args) => {
+    if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+    switch (args[0]) {
+      case 'run':
+        return stdout(child);
+      case 'wait':
+        return stdout({ reason: 'status', status: 'blocked' });
+      case 'get':
+        return stdout({ ...child, status: { app: 'pi', state: 'blocked' } });
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+  expect(
+    (await invoke('hc_run', { name: 'review', task: 'Review the change' })).details,
+  ).toMatchObject({
+    terminal: { address: 't5', status: 'blocked' },
+    first_message: { sent: false },
+  });
+});
+
+test('hc_send routes to the parent and managed peers, and rejects unrelated terminals', async () => {
+  const sends: string[][] = [];
+  const terminals = [self, sibling, unrelated, child];
+  let siblingState = 'working';
+  const invoke = register(async (_command, args) => {
+    switch (args[0]) {
+      case 'get':
+        if (args.at(-1) === parent.address) return stdout(parent);
+        if (args.at(-1) === sibling.address) {
+          return stdout({ ...sibling, status: { app: 'pi', state: siblingState } });
+        }
+        return stdout(terminals.find((terminal) => terminal.address === args.at(-1)));
+      case 'ls':
+        expect(args).toEqual(['ls', '--json', '--all', '--label', 'pi-herdr-core=agent']);
+        return stdout({ terminals });
+      case 'send':
+        sends.push(args);
+        if (args.at(-2) === 't3' && args.includes('--if')) {
+          siblingState = 'done';
+          return { ...stdout(null), code: 10, stderr: '{"error":{"kind":"status_mismatch"}}' };
+        }
+        return stdout({ started: true, turn: 1 });
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+  const family = await invoke('hc_agents', {});
+  expect(family.details).toMatchObject({
+    parent: { address: 't1' },
+    children: [{ address: 't5' }],
+    siblings: [{ address: 't3' }],
+  });
+  await invoke('hc_send', { message: 'Report to parent' });
+  await invoke('hc_send', { target: 't3', message: 'Coordinate with sibling' });
+  await expect(invoke('hc_send', { target: 't4', message: 'Outside' })).rejects.toThrow('outside');
+  await expect(invoke('hc_manage', { target: 't3', action: 'kill' })).rejects.toThrow(
+    'direct child',
+  );
+  expect(sends).toEqual([
+    [
+      'send',
+      '--json',
+      '--if',
+      'working',
+      '--',
+      't1',
+      'HC agent message from t2:\n\nReport to parent',
+    ],
+    [
+      'send',
+      '--json',
+      '--if',
+      'working',
+      '--',
+      't3',
+      'HC agent message from t2:\n\nCoordinate with sibling',
+    ],
+    ['send', '--json', '--', 't3', 'HC agent message from t2:\n\nCoordinate with sibling'],
+  ]);
+});
