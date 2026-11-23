@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
+export const agentLabel = 'pi-herdr-agents=agent';
 // Keep terminals created before the package rename discoverable.
-export const agentLabel = 'pi-herdr-core=agent';
+const legacyAgentLabel = 'pi-herdr-core=agent';
 
 interface ListedTerminal {
   address: string;
@@ -97,12 +98,14 @@ export class HcClient {
 
   async family(address: string) {
     const self = await this.get(address);
-    const { terminals } = await this.command<{ terminals: ListedTerminal[] }>('ls', [
-      '--all',
-      '--label',
-      agentLabel,
-    ]);
-    const local = terminals.filter((terminal) => !terminal.address.includes('/'));
+    const lists = await Promise.all(
+      [legacyAgentLabel, agentLabel].map((label) =>
+        this.command<{ terminals: ListedTerminal[] }>('ls', ['--all', '--label', label]),
+      ),
+    );
+    const terminals = lists.flatMap(({ terminals }) => terminals);
+    const byAddress = new Map(terminals.map((terminal) => [terminal.address, terminal]));
+    const local = [...byAddress.values()].filter((terminal) => !terminal.address.includes('/'));
     const parent =
       self.parent && !self.parent.includes('/') ? await this.getParent(self.parent) : null;
     const children = local.filter((terminal) => terminal.parent === self.address);

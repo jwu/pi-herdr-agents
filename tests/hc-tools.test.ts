@@ -69,7 +69,7 @@ test('hc_run launches an interactive child and waits for idle before sending its
       '--cwd',
       workspace,
       '--label',
-      'pi-herdr-core=agent',
+      'pi-herdr-agents=agent',
       '--parent',
       't2',
       '--',
@@ -119,7 +119,8 @@ test('hc_run preserves the child address when startup is blocked', async () => {
 
 test('hc_send routes to the parent and managed peers, and rejects unrelated terminals', async () => {
   const sends: string[][] = [];
-  const terminals = [self, sibling, unrelated, child];
+  const newChild = { ...child, address: 't6' };
+  const terminals = [self, sibling, unrelated, child, newChild];
   let siblingState = 'working';
   const invoke = register(async (_command, args) => {
     switch (args[0]) {
@@ -129,9 +130,15 @@ test('hc_send routes to the parent and managed peers, and rejects unrelated term
           return stdout({ ...sibling, status: { app: 'pi', state: siblingState } });
         }
         return stdout(terminals.find((terminal) => terminal.address === args.at(-1)));
-      case 'ls':
-        expect(args).toEqual(['ls', '--json', '--all', '--label', 'pi-herdr-core=agent']);
-        return stdout({ terminals });
+      case 'ls': {
+        const label = args.at(-1);
+        expect(args.slice(0, -1)).toEqual(['ls', '--json', '--all', '--label']);
+        if (label === 'pi-herdr-agents=agent')
+          return stdout({ terminals: [self, child, newChild] });
+        if (label === 'pi-herdr-core=agent')
+          return stdout({ terminals: [sibling, unrelated, child] });
+        throw new Error(`Unexpected label ${label}`);
+      }
       case 'send':
         sends.push(args);
         if (args.at(-2) === 't3' && args.includes('--if')) {
@@ -146,7 +153,7 @@ test('hc_send routes to the parent and managed peers, and rejects unrelated term
   const family = await invoke('hc_agents', {});
   expect(family.details).toMatchObject({
     parent: { address: 't1' },
-    children: [{ address: 't5' }],
+    children: [{ address: 't5' }, { address: 't6' }],
     siblings: [{ address: 't3' }],
   });
   await invoke('hc_send', { message: 'Report to parent' });
