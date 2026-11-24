@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0
+
+- Let `hc_run` callers select a model allowed by the agent profile.
+- Use the shared `models` field and `tools` syntax from `@johnnywu/pi-agent-profiles@0.2.0`.
+
 ## 0.1.1
 
 - Use the parent Pi's `PATH` when launching a child through Herdr Core on Unix so Pi launchers can find Node.js.
