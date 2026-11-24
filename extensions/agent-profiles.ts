@@ -42,8 +42,12 @@ async function launchDigest(agent: AgentProfile) {
   return profileDigest(source);
 }
 
-export async function childPiArgs(agent: AgentProfile | undefined, scope?: AgentScope) {
-  if (!agent && !scope) return [];
+export async function childPiArgs(
+  agent: AgentProfile | undefined,
+  scope?: AgentScope,
+  model?: string,
+) {
+  if (!agent && !scope) return model ? ['--model', model] : [];
 
   const allowed = agent?.allowedAgents?.length ? agent.allowedAgents : undefined;
   const inherited = scope?.allowedAgents;
@@ -63,7 +67,7 @@ export async function childPiArgs(agent: AgentProfile | undefined, scope?: Agent
     args.push('--exclude-tools', 'hc_run');
   }
   if (agent?.systemPromptMode === 'replace-all') args.push('--no-context-files');
-  if (agent?.model) args.push('--model', agent.model);
+  if (model) args.push('--model', model);
   if (agent) args.push('--thinking', agent.thinking);
   if (agent?.tools.length) {
     const tools = agent.tools.map((tool) => tool.replace(/^([+-]?)subagent$/, '$1hc_run'));

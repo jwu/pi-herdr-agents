@@ -23,7 +23,7 @@ For a local checkout, run `pi -e .` from the repository directory inside an hc t
 
 | Tool | Usage |
 | --- | --- |
-| `hc_run` | Pass `name`, `task`, and optionally `agent`, `cwd`, and `labels`. The first task is delivered once the child Pi is idle. |
+| `hc_run` | Pass `name`, `task`, and optionally `agent`, `model`, `cwd`, and `labels`. The first task is delivered once the child Pi is idle. |
 | `hc_agents` | List the hc addresses and statuses of the current agent, its parent, its direct children, and its siblings. Set `include_finished` to include finished children and siblings. |
 | `hc_ls` | List live terminals visible to Herdr Core, including terminals on connected machines. Set `include_finished` to add finished terminals. Returns the JSON from `hc ls`. |
 | `hc_send` | Pass a `message`. Omit `target` to send it to the parent, or provide the address of a direct child or sibling. If Pi is working, it receives the message as a steering message. |
@@ -49,6 +49,7 @@ By default, child agents exit when the program in their parent terminal exits. T
 name: reviewer
 description: Review changes for correctness and regressions.
 tools: read, grep, find, ls
+models: anthropic/claude-sonnet-4-6, magpie/claude/*
 thinking: high
 systemPrompt: replace
 ---
@@ -61,12 +62,15 @@ Invoke it with `hc_run({ "name": "review-auth", "agent": "reviewer", "task": "Re
 | Field | Behavior |
 | --- | --- |
 | `name`, `description` | Required profile name and optional summary. |
-| `model`, `thinking` | Optional Pi model and thinking level. Thinking defaults to `off` for a named profile. |
+| `models` | Optional comma-separated model IDs and `*` patterns. Pass `model` to `hc_run` to select an allowed model. With no selection, the first entry is used. A wildcard default uses the first available Pi model that matches. An omitted or empty list allows any selection. |
+| `thinking` | Optional Pi thinking level. Defaults to `off` for a named profile. |
 | `systemPrompt` | `append` (default) adds the body to the normal prompt. `replace` substitutes the default prompt and keeps project context. `replace-all` also disables project context. Both replacement modes include a tool list and guidelines from the active tools. |
 | `tools` | Optional comma-separated Pi tool list. `subagent` selects `hc_run`. HC includes `hc_send` and `hc_agents` for reporting and coordination. |
 | `skills` | Comma-separated names or `*` patterns matched against skills available to the child Pi, including enabled package skills. Only matching skills are advertised in the prompt. |
 | `allowedAgents`, `maxDepth` | Optional comma-separated list of profiles available for HC delegation and maximum delegation depth (default `10`). Descendants inherit the applicable limits. `maxDepth: 0` prevents the named child from delegating. |
 | `debug` | Set to `true` to write `debug-system-prompt.md` in the child workspace when a turn starts. |
+
+Rename an existing `model:` field to `models:`. Profile lookup reports a migration warning for definitions with the old field.
 
 The optional `<pi-subagents-runtime-tools />` marker places the runtime tool block at a specific point in a replacement prompt. Without the marker, HC places it after the body.
 

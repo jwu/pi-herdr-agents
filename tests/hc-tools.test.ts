@@ -141,7 +141,7 @@ test('hc_run resolves an agent in the parent workspace and enables the HC report
         '---',
         'name: hc-test-reviewer',
         'systemPrompt: replace-all',
-        'model: test/model',
+        'models: test/default, test/model-*',
         'thinking: high',
         'tools: read, subagent',
         'maxDepth: 0',
@@ -163,7 +163,7 @@ test('hc_run resolves an agent in the parent workspace and enables the HC report
           'hc_run',
           '--no-context-files',
           '--model',
-          'test/model',
+          'test/model-custom',
           '--thinking',
           'high',
           '--tools',
@@ -177,13 +177,42 @@ test('hc_run resolves an agent in the parent workspace and enables the HC report
       if (args[0] === 'send') return stdout({ started: true, turn: 1 });
       throw new Error(`Unexpected ${args[0]}`);
     }, cwd);
+    await expect(
+      invoke('hc_run', {
+        name: 'review',
+        agent: 'hc-test-reviewer',
+        task: 'Review the change',
+        model: 'other/model',
+      }),
+    ).rejects.toThrow('Model "other/model" is not allowed');
     const output = await invoke('hc_run', {
       name: 'review',
       agent: 'hc-test-reviewer',
+      model: 'test/model-custom',
       task: 'Review the change',
       cwd: 'child',
     });
     expect(output.details).toMatchObject({ first_message: { sent: true } });
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('hc_run reports the migration warning for profiles using the old model field', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));
+  try {
+    const agents = join(cwd, '.pi', 'agents');
+    await mkdir(agents, { recursive: true });
+    const profile = join(agents, 'legacy.md');
+    await writeFile(profile, '---\nname: hc-test-legacy\nmodel: test/model\n---\n');
+    const invoke = register(async () => {
+      throw new Error('Unexpected CLI call');
+    }, cwd);
+    await expect(
+      invoke('hc_run', { name: 'review', agent: 'hc-test-legacy', task: 'Review the change' }),
+    ).rejects.toThrow(
+      `${profile}: The \`model\` field is no longer supported. Please use \`models\` instead.`,
+    );
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

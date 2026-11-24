@@ -1,7 +1,11 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { isAbsolute, resolve } from 'node:path';
 import { Type } from 'typebox';
-import { loadAgentDefinitions, type AgentProfile } from '@johnnywu/pi-agent-profiles';
+import {
+  loadAgentDefinitions,
+  selectAgentModel,
+  type AgentProfile,
+} from '@johnnywu/pi-agent-profiles';
 import { childPiArgs, type AgentScope } from './agent-profiles.ts';
 import { agentLabel, HcClient, summarizeTerminal } from './hc-client.ts';
 
@@ -109,6 +113,12 @@ export function registerHcTools(
         }),
       ),
       task: messageParam,
+      model: Type.Optional(
+        Type.String({
+          description:
+            'Optional model ID or provider/model ID. Defaults to the first entry in the agent profile’s models list if configured.',
+        }),
+      ),
       cwd: Type.Optional(
         Type.String({
           description: 'Directory relative to the current Pi workspace, or an absolute path.',
@@ -126,7 +136,7 @@ export function registerHcTools(
         ),
       ),
     }),
-    async execute(_id, { name, agent, task, cwd, labels = {} }, signal, _onUpdate, ctx) {
+    async execute(_id, { name, agent, task, model, cwd, labels = {} }, signal, _onUpdate, ctx) {
       const message = text(task);
       const scope = getScope?.();
       if (scope?.maxDepth !== undefined && scope.depth > scope.maxDepth) {
@@ -156,6 +166,9 @@ export function registerHcTools(
           );
         }
       }
+      const selectedModel = selectAgentModel(profile, model, () =>
+        ctx.modelRegistry.getAvailable(),
+      );
       const labelArgs = Object.entries(labels).flatMap(([key, value]) => {
         if (agentLabel.startsWith(`${key}=`)) throw new Error(`Label key "${key}" is reserved.`);
         return ['--label', `${key}=${value}`];
@@ -191,7 +204,7 @@ export function registerHcTools(
         ...command,
         '-e',
         extensionPath,
-        ...(await childPiArgs(profile, scope)),
+        ...(await childPiArgs(profile, scope, selectedModel)),
       ]);
       const child = terminal.address;
       const initialTask = [
