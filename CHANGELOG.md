@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Count a profile's `maxDepth` from the agent's own level instead of from the lead, matching `pi-subagents`. A profile with `maxDepth: 1` can now delegate one level wherever it runs. The limit still passes down the chain, and a descendant can tighten it but not widen it.
 - Apply the `maxDepth` that `pi --agent` announces on `pi-subagents:configure` to the lead, so `maxDepth: 0` stops the lead from delegating and `maxDepth: 1` stops its children.
