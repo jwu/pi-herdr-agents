@@ -1,4 +1,9 @@
-import { herdrAgentTools, parseAgentProfile, type AgentProfile } from '@johnnywu/pi-agent-profiles';
+import {
+  herdrAgentTools,
+  herdrDelegationTools,
+  parseAgentProfile,
+  type AgentProfile,
+} from '@johnnywu/pi-agent-profiles';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
@@ -61,15 +66,21 @@ export async function childPiArgs(
         ? allowed.filter((name) => inherited.includes(name))
         : (inherited ?? allowed),
   };
+  const tools = agent?.tools.length ? herdrAgentTools(agent.tools, { keepSubagent: true }) : [];
+  const atLimit =
+    (launch.maxDepth !== undefined && launch.depth > launch.maxDepth) ||
+    launch.allowedAgents?.length === 0;
+  // Delegation is opt-in. An allowlist names the tools it wants. Otherwise the child keeps only
+  // the delegation tools its profile adds with `+`.
+  const listed = tools.length > 0 && !/^[+-]/.test(tools[0]!);
+  const withheld = herdrDelegationTools.filter(
+    (tool) => atLimit || (!listed && !tools.includes(`+${tool}`)),
+  );
   const args = [`--${agentFlag}`, JSON.stringify(launch)];
-  if (launch.maxDepth !== undefined && launch.depth > launch.maxDepth) {
-    args.push('--exclude-tools', 'hc_subagent');
-  }
+  if (withheld.length) args.push('--exclude-tools', withheld.join(','));
   if (agent?.systemPromptMode === 'replace-all') args.push('--no-context-files');
   if (model) args.push('--model', model);
   if (agent) args.push('--thinking', agent.thinking);
-  if (agent?.tools.length) {
-    args.push('--tools', herdrAgentTools(agent.tools, { keepSubagent: true }).join(','));
-  }
+  if (tools.length) args.push('--tools', tools.join(','));
   return args;
 }

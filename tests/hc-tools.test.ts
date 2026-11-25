@@ -22,6 +22,7 @@ const parent = {
 const sibling = { ...self, address: 't3', agent: 'pi', status: 'done' };
 const unrelated = { ...sibling, address: 't4', parent: 't8' };
 const child = { ...self, address: 't5', parent: self.address };
+const delegationTools = 'hc_subagent,hc_renew,hc_read,hc_stop,hc_rm';
 
 function register(exec: ExtensionAPI['exec'], cwd = workspace) {
   const tools = new Map<string, ToolDefinition>();
@@ -117,6 +118,8 @@ test('hc_subagent launches an interactive child and waits for idle before sendin
       '/package/extensions/index.ts',
       '--hc-agent-profile',
       JSON.stringify({ depth: 1 }),
+      '--exclude-tools',
+      delegationTools,
     ],
     ['wait', '--json', '--timeout', '30', '--', 't5'],
     ['get', '--json', '--', 't5'],
@@ -167,7 +170,7 @@ test('hc_subagent resolves an agent in the parent workspace and enables the HC r
         });
         expect(args.slice(flag + 2)).toEqual([
           '--exclude-tools',
-          'hc_subagent',
+          delegationTools,
           '--no-context-files',
           '--model',
           'test/model-custom',
@@ -214,6 +217,7 @@ test.each(['+', '-'])(
       const source = `---\nname: hc-test-reviewer\ntools: ${prefix}subagent\n---\n`;
       await writeFile(profile, source);
       const args = await childPiArgs(parseAgentProfile(source, profile));
+      expect(args.includes('--exclude-tools')).toBe(prefix === '-');
       expect(args.slice(-2)).toEqual([
         '--tools',
         ['subagent', 'hc_subagent', 'hc_renew', 'hc_read', 'hc_stop', 'hc_rm']
@@ -221,6 +225,33 @@ test.each(['+', '-'])(
           .concat('+hc_send', '+hc_agents')
           .join(','),
       ]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+test.each([
+  ['has no tools', [], undefined, delegationTools],
+  ['adds other tools', ['tools: +codemode'], undefined, delegationTools],
+  ['lists them by pattern', ['tools: read, hc_*'], undefined, undefined],
+  [
+    'has no agent left to delegate to',
+    ['tools: read, subagent', 'allowedAgents: scout'],
+    { depth: 0, allowedAgents: ['worker'] },
+    delegationTools,
+  ],
+])(
+  'hc_subagent decides the delegation tools of a child whose profile %s',
+  async (_case, fields, scope, excluded) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));
+    try {
+      const profile = join(cwd, 'profile.md');
+      const source = ['---', 'name: hc-test-reviewer', ...fields, '---', ''].join('\n');
+      await writeFile(profile, source);
+      const args = await childPiArgs(parseAgentProfile(source, profile), scope);
+      const flag = args.indexOf('--exclude-tools');
+      expect(flag < 0 ? undefined : args[flag + 1]).toBe(excluded);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
