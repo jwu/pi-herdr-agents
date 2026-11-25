@@ -1,6 +1,6 @@
 {
   "name": "@johnnywu/pi-herdr-agents",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Launch, message, and manage interactive Pi subagents in Herdr Core.",
   "type": "module",
   "keywords": [
