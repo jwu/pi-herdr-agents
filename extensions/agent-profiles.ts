@@ -68,6 +68,8 @@ export async function childPiArgs(
   if (agent?.systemPromptMode === 'replace-all') args.push('--no-context-files');
   if (model) args.push('--model', model);
   if (agent) args.push('--thinking', agent.thinking);
-  if (agent?.tools.length) args.push('--tools', herdrAgentTools(agent.tools).join(','));
+  if (agent?.tools.length) {
+    args.push('--tools', herdrAgentTools(agent.tools, { keepSubagent: true }).join(','));
+  }
   return args;
 }

@@ -4,9 +4,11 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
+import { parseAgentProfile } from '@johnnywu/pi-agent-profiles';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { childPiArgs } from '../extensions/agent-profiles.ts';
 import { registerHcTools } from '../extensions/hc-tools.ts';
 
 const workspace = process.cwd();
@@ -172,7 +174,7 @@ test('hc_subagent resolves an agent in the parent workspace and enables the HC r
           '--thinking',
           'high',
           '--tools',
-          'read,hc_subagent,hc_renew,hc_read,hc_stop,hc_rm,hc_send,hc_agents',
+          'read,subagent,hc_subagent,hc_renew,hc_read,hc_stop,hc_rm,hc_send,hc_agents',
         ]);
         expect(args[args.indexOf('--cwd') + 1]).toBe(join(cwd, 'child'));
         return stdout(child);
@@ -202,6 +204,28 @@ test('hc_subagent resolves an agent in the parent workspace and enables the HC r
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+test.each(['+', '-'])(
+  'hc_subagent applies %ssubagent to both blocking and HC delegation tools',
+  async (prefix) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));
+    try {
+      const profile = join(cwd, 'profile.md');
+      const source = `---\nname: hc-test-reviewer\ntools: ${prefix}subagent\n---\n`;
+      await writeFile(profile, source);
+      const args = await childPiArgs(parseAgentProfile(source, profile));
+      expect(args.slice(-2)).toEqual([
+        '--tools',
+        ['subagent', 'hc_subagent', 'hc_renew', 'hc_read', 'hc_stop', 'hc_rm']
+          .map((tool) => `${prefix}${tool}`)
+          .concat('+hc_send', '+hc_agents')
+          .join(','),
+      ]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
 
 test('hc_subagent reports the migration warning for profiles using the old model field', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));

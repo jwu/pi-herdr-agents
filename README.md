@@ -141,9 +141,9 @@ Invoke it with `hc_subagent({ "name": "review-auth", "agent": "reviewer", "task"
 | `models` | Optional comma-separated model IDs and `*` patterns. Pass `model` to `hc_subagent` to select an allowed model. With no selection, the first entry is used. A wildcard default uses the first available Pi model that matches. An omitted or empty list allows any selection. |
 | `thinking` | Optional Pi thinking level. Defaults to `off` for a named profile. |
 | `systemPrompt` | `append` (default) adds the body to the normal prompt. `replace` substitutes the default prompt and keeps project context. `replace-all` also disables project context. Both replacement modes include a tool list and guidelines from the active tools. |
-| `tools` | Optional comma-separated Pi tool list. `subagent` selects `hc_subagent`, `hc_renew`, `hc_read`, `hc_stop`, and `hc_rm`. HC includes `hc_send` and `hc_agents` for reporting and coordination. |
+| `tools` | Optional comma-separated Pi tool list. `subagent` selects the blocking `subagent` tool from `pi-subagents` as well as `hc_subagent`, `hc_renew`, `hc_read`, `hc_stop`, and `hc_rm`. `+subagent` and `-subagent` pass the same modifier to all six tools. HC includes `hc_send` and `hc_agents` for reporting and coordination. |
 | `skills` | Comma-separated names or `*` patterns matched against skills available to the child Pi, including enabled package skills. Only matching skills are advertised in the prompt. |
-| `allowedAgents`, `maxDepth` | Optional comma-separated list of profiles available for HC delegation and maximum delegation depth (default `10`). Descendants inherit the applicable limits. `maxDepth: 0` prevents the named child from delegating. |
+| `allowedAgents`, `maxDepth` | Optional comma-separated list of profiles available for HC delegation and maximum delegation depth (default `10`). HC descendants inherit these limits. `maxDepth: 0` prevents the named child from using `hc_subagent`. |
 | `debug` | Set to `true` to write `debug-system-prompt.md` in the child workspace when a turn starts. |
 
 Rename an existing `model:` field to `models:`. Profile lookup reports a migration warning for definitions with the old field.

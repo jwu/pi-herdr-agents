@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Keep the blocking `subagent` tool from `pi-subagents` alongside the five HC child management tools when a profile selects `subagent`. Pass `+subagent` and `-subagent` through to Pi with the same modifier on all six tools.
+
 ## 0.3.1
 
 - Do not register the HC tools in `pi-subagents` children, which inherit `HC_TERMINAL_ID` from the lead.
