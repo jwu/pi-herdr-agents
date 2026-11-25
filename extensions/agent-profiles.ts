@@ -1,6 +1,8 @@
 import {
+  delegationDepthLimit,
   herdrAgentTools,
   herdrDelegationTools,
+  narrowAllowedAgents,
   parseAgentProfile,
   type AgentProfile,
 } from '@johnnywu/pi-agent-profiles';
@@ -11,6 +13,7 @@ export const agentFlag = 'hc-agent-profile';
 
 export interface AgentScope {
   depth: number;
+  /** Deepest level that may still delegate. An agent at `depth` delegates while depth <= maxDepth. */
   maxDepth?: number;
   allowedAgents?: string[];
 }
@@ -54,17 +57,14 @@ export async function childPiArgs(
 ) {
   // Every child gets the launch flag, which also marks it as started by hc_subagent.
   const allowed = agent?.allowedAgents?.length ? agent.allowedAgents : undefined;
-  const inherited = scope?.allowedAgents;
+  const depth = (scope?.depth ?? 0) + 1;
   const launch: AgentLaunch = {
     filePath: agent?.filePath,
     // Hash the same file contents used for argument selection.
     digest: agent ? await launchDigest(agent) : undefined,
-    depth: (scope?.depth ?? 0) + 1,
-    maxDepth: agent ? Math.min(agent.maxDepth, scope?.maxDepth ?? agent.maxDepth) : scope?.maxDepth,
-    allowedAgents:
-      inherited && allowed
-        ? allowed.filter((name) => inherited.includes(name))
-        : (inherited ?? allowed),
+    depth,
+    maxDepth: delegationDepthLimit(depth, agent?.maxDepth, scope?.maxDepth),
+    allowedAgents: narrowAllowedAgents(allowed, scope?.allowedAgents),
   };
   const tools = agent?.tools.length ? herdrAgentTools(agent.tools, { keepSubagent: true }) : [];
   const atLimit =

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Count a profile's `maxDepth` from the agent's own level instead of from the lead, matching `pi-subagents`. A profile with `maxDepth: 1` can now delegate one level wherever it runs. The limit still passes down the chain, and a descendant can tighten it but not widen it.
+- Apply the `maxDepth` that `pi --agent` announces on `pi-subagents:configure` to the lead, so `maxDepth: 0` stops the lead from delegating and `maxDepth: 1` stops its children.
+- Use the delegation scope event, depth rule, and agent list narrowing from `@johnnywu/pi-agent-profiles@0.4.1`. A profile with an unknown frontmatter field is now rejected instead of having that field ignored.
+
 ## 0.4.0
 
 - **Breaking:** Make delegation opt-in for children. A child gets `hc_subagent`, `hc_renew`, `hc_read`, `hc_stop`, and `hc_rm` only when its profile's `tools` selects them, with `subagent`, `+subagent`, or the tool names. A child launched without `agent`, or with a profile that has no `tools`, no longer gets them.

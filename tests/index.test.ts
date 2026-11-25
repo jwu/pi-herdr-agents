@@ -51,3 +51,27 @@ test('allowedAgents from pi --agent restrict hc_subagent', async () => {
   listeners.get('pi-subagents:configure')!({ allowedAgents: undefined });
   await expect(invoke('hc-test-missing')).rejects.toThrow('Unknown HC agent: hc-test-missing');
 });
+
+test('maxDepth from pi --agent limits hc_subagent', async () => {
+  process.env.HC_TERMINAL_ID = 't2';
+  delete process.env.PI_SUBAGENT_DEPTH;
+  const { tools, listeners } = load();
+  const invoke = () =>
+    tools
+      .get('hc_subagent')!
+      .execute(
+        'test',
+        { name: 'a', agent: 'hc-test-missing', task: 'Work' },
+        undefined,
+        undefined,
+        {
+          cwd: process.cwd(),
+        } as ExtensionToolContext,
+      );
+
+  listeners.get('pi-subagents:configure')!({ maxDepth: 0 });
+  await expect(invoke()).rejects.toThrow('reached its delegation depth limit');
+  // With maxDepth: 1 the lead passes the depth check and fails on the unknown agent instead.
+  listeners.get('pi-subagents:configure')!({ maxDepth: 1 });
+  await expect(invoke()).rejects.toThrow('Unknown HC agent: hc-test-missing');
+});

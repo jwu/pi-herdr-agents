@@ -5,7 +5,7 @@
     "": {
       "name": "pi-herdr-agents",
       "dependencies": {
-        "@johnnywu/pi-agent-profiles": "0.3.0",
+        "@johnnywu/pi-agent-profiles": "0.4.1",
       },
       "devDependencies": {
         "@earendil-works/pi-coding-agent": "^1.6.0",
@@ -84,7 +84,7 @@
 
     "@isaacs/nonrecursive-glob-match": ["@isaacs/nonrecursive-glob-match@1.1.0", "", {}, "sha512-GPm/Dbvk5RLmhRnxXIa7nTpK0xtl4E0wj0MslsuNiJ1FIROU+2+9lgUC/dgF7Ey4QCWhfEsgxilMRMCdHPfDfw=="],
 
-    "@johnnywu/pi-agent-profiles": ["@johnnywu/pi-agent-profiles@0.3.0", "", { "peerDependencies": { "@earendil-works/pi-coding-agent": "^1.6.0" } }, "sha512-0Xcw552XE3/EvS/ZFiyN3qViO5Uilqt9InrmFZbcxrEka9WN4SMTm1xLjDbvj8RcfArL+63n+xBpSgIUlXoDGQ=="],
+    "@johnnywu/pi-agent-profiles": ["@johnnywu/pi-agent-profiles@0.4.1", "", { "peerDependencies": { "@earendil-works/pi-coding-agent": "^1.6.0" } }, "sha512-qnQWlpJ8y8QxSxdHSDufUIvdITf2P+KjZ6QBKjdllyB/QdKFv+61dlTxhSvKCrk9on1bC86sgArwuZYiXJPS2g=="],
 
     "@protobufjs/aspromise": ["@protobufjs/aspromise@1.1.2", "", {}, "sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ=="],
 

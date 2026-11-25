@@ -258,6 +258,52 @@ test.each([
   },
 );
 
+test('hc_subagent counts maxDepth from each agent and passes the tightest limit down', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));
+  try {
+    const load = async (name: string, maxDepth: number) => {
+      const file = join(cwd, `${name}.md`);
+      const source = [
+        '---',
+        `name: ${name}`,
+        'tools: read, subagent',
+        `maxDepth: ${maxDepth}`,
+        '---',
+        '',
+      ].join('\n');
+      await writeFile(file, source);
+      return parseAgentProfile(source, file);
+    };
+    const launch = async (
+      profile: Awaited<ReturnType<typeof load>>,
+      scope?: Parameters<typeof childPiArgs>[1],
+    ) => {
+      const args = await childPiArgs(profile, scope);
+      const { depth, maxDepth } = JSON.parse(args[1]!);
+      return { depth, maxDepth, delegates: !args.includes('--exclude-tools') };
+    };
+
+    // a, b, c, and d each declare maxDepth: 3. The budget of a runs out at d.
+    const three = await load('three', 3);
+    const chain = [await launch(three)];
+    for (let level = 1; level < 4; level++) chain.push(await launch(three, chain[level - 1]));
+    expect(chain).toEqual([
+      { depth: 1, maxDepth: 3, delegates: true },
+      { depth: 2, maxDepth: 3, delegates: true },
+      { depth: 3, maxDepth: 3, delegates: true },
+      { depth: 4, maxDepth: 3, delegates: false },
+    ]);
+
+    // maxDepth: 1 allows one level of children wherever the agent runs.
+    const one = await load('one', 1);
+    const nested = await launch(one, { depth: 1, maxDepth: 10 });
+    expect(nested).toEqual({ depth: 2, maxDepth: 2, delegates: true });
+    expect(await launch(three, nested)).toEqual({ depth: 3, maxDepth: 2, delegates: false });
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('hc_subagent reports the migration warning for profiles using the old model field', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));
   try {

@@ -1,4 +1,11 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import {
+  delegationDepthLimit,
+  delegationScopeEvent,
+  narrowAllowedAgents,
+  parseDelegationScope,
+  type DelegationScope,
+} from '@johnnywu/pi-agent-profiles';
 import { fileURLToPath } from 'node:url';
 import { agentFlag, type AgentScope } from './agent-profiles.ts';
 import { registerAgentProfile } from './agent-prompt.ts';
@@ -12,20 +19,22 @@ export default function (pi: ExtensionAPI): void {
   if (!address || Number(process.env.PI_SUBAGENT_DEPTH) > 0) return;
   const getLaunch = registerAgentProfile(pi);
 
-  // `pi --agent` (pi-config's custom-agent) announces its allowedAgents on this event.
-  let configured: string[] | undefined;
-  pi.events.on('pi-subagents:configure', (configuration: unknown) => {
-    const allowed = (configuration as { allowedAgents?: unknown } | undefined)?.allowedAgents;
-    configured = Array.isArray(allowed) ? allowed.map(String) : undefined;
+  // `pi --agent` (pi-config's custom-agent) announces the allowedAgents and maxDepth of the
+  // session's own profile on this event.
+  let configured: DelegationScope = {};
+  pi.events.on(delegationScopeEvent, (configuration: unknown) => {
+    configured = parseDelegationScope(configuration);
   });
   const getScope = (): AgentScope | undefined => {
     const launch = getLaunch();
-    if (!configured) return launch;
-    const inherited = launch?.allowedAgents;
+    const { allowedAgents, maxDepth } = configured;
+    if (!allowedAgents && maxDepth === undefined) return launch;
+    const depth = launch?.depth ?? 0;
     return {
       ...launch,
-      depth: launch?.depth ?? 0,
-      allowedAgents: inherited ? configured.filter((name) => inherited.includes(name)) : configured,
+      depth,
+      maxDepth: delegationDepthLimit(depth, maxDepth, launch?.maxDepth),
+      allowedAgents: narrowAllowedAgents(allowedAgents, launch?.allowedAgents),
     };
   };
 
