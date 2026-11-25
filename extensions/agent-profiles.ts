@@ -47,8 +47,7 @@ export async function childPiArgs(
   scope?: AgentScope,
   model?: string,
 ) {
-  if (!agent && !scope) return model ? ['--model', model] : [];
-
+  // Every child gets the launch flag, which also marks it as started by hc_subagent.
   const allowed = agent?.allowedAgents?.length ? agent.allowedAgents : undefined;
   const inherited = scope?.allowedAgents;
   const launch: AgentLaunch = {
@@ -64,13 +63,13 @@ export async function childPiArgs(
   };
   const args = [`--${agentFlag}`, JSON.stringify(launch)];
   if (launch.maxDepth !== undefined && launch.depth > launch.maxDepth) {
-    args.push('--exclude-tools', 'hc_run');
+    args.push('--exclude-tools', 'hc_subagent');
   }
   if (agent?.systemPromptMode === 'replace-all') args.push('--no-context-files');
   if (model) args.push('--model', model);
   if (agent) args.push('--thinking', agent.thinking);
   if (agent?.tools.length) {
-    const tools = agent.tools.map((tool) => tool.replace(/^([+-]?)subagent$/, '$1hc_run'));
+    const tools = agent.tools.map((tool) => tool.replace(/^([+-]?)subagent$/, '$1hc_subagent'));
     const essential = ['hc_send', 'hc_agents'];
     if (tools.every((tool) => /^[+-]/.test(tool))) {
       tools.push(...essential.map((tool) => `+${tool}`));

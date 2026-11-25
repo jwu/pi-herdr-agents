@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { agentFlag, readLaunchedAgent, type AgentLaunch } from './agent-profiles.ts';
 
 export function registerAgentProfile(pi: ExtensionAPI) {
-  pi.registerFlag(agentFlag, { type: 'string', description: 'Agent profile selected by hc_run' });
+  pi.registerFlag(agentFlag, {
+    type: 'string',
+    description: 'Agent profile selected by hc_subagent',
+  });
   let launch: AgentLaunch | undefined;
   let agent: AgentProfile | undefined;
   let startupError: string | undefined;

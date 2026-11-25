@@ -37,6 +37,11 @@ function register(exec: ExtensionAPI['exec'], cwd = workspace) {
     tools.get(name)!.execute('test', params, undefined, undefined, { cwd } as ExtensionToolContext);
 }
 
+const env =
+  process.platform !== 'win32' && process.env.PATH
+    ? ['/usr/bin/env', `PATH=${process.env.PATH}`]
+    : [];
+
 function stdout(data: unknown) {
   return { stdout: JSON.stringify(data), stderr: '', code: 0, killed: false, truncated: false };
 }
@@ -62,7 +67,7 @@ test('hc_ls returns the CLI listing and includes finished terminals on request',
   ]);
 });
 
-test('hc_run launches an interactive child and waits for idle before sending its task', async () => {
+test('hc_subagent launches an interactive child and waits for idle before sending its task', async () => {
   const calls: string[][] = [];
   const invoke = register(async (command, args) => {
     if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
@@ -80,7 +85,7 @@ test('hc_run launches an interactive child and waits for idle before sending its
         throw new Error(`Unexpected ${args[0]}`);
     }
   });
-  const output = await invoke('hc_run', {
+  const output = await invoke('hc_subagent', {
     name: 'review',
     task: '-p @notes\nReview this',
     labels: { role: 'reviewer', scope: 'file=a b.ts' },
@@ -104,12 +109,12 @@ test('hc_run launches an interactive child and waits for idle before sending its
       '--parent',
       't2',
       '--',
-      ...(process.platform !== 'win32' && process.env.PATH
-        ? ['/usr/bin/env', `PATH=${process.env.PATH}`]
-        : []),
+      ...env,
       executable,
       '-e',
       '/package/extensions/index.ts',
+      '--hc-agent-profile',
+      JSON.stringify({ depth: 1 }),
     ],
     ['wait', '--json', '--timeout', '30', '--', 't5'],
     ['get', '--json', '--', 't5'],
@@ -129,7 +134,7 @@ test('hc_run launches an interactive child and waits for idle before sending its
   });
 });
 
-test('hc_run resolves an agent in the parent workspace and enables the HC reporting tools', async () => {
+test('hc_subagent resolves an agent in the parent workspace and enables the HC reporting tools', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));
   try {
     const agents = join(cwd, '.pi', 'agents');
@@ -153,21 +158,21 @@ test('hc_run resolves an agent in the parent workspace and enables the HC report
       if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
       if (args[0] === 'run') {
         const flag = args.indexOf('--hc-agent-profile');
-        expect(JSON.parse(args[flag + 1])).toMatchObject({
+        expect(JSON.parse(args[flag + 1]!)).toMatchObject({
           filePath: profile,
           depth: 1,
           maxDepth: 0,
         });
         expect(args.slice(flag + 2)).toEqual([
           '--exclude-tools',
-          'hc_run',
+          'hc_subagent',
           '--no-context-files',
           '--model',
           'test/model-custom',
           '--thinking',
           'high',
           '--tools',
-          'read,hc_run,hc_send,hc_agents',
+          'read,hc_subagent,hc_send,hc_agents',
         ]);
         expect(args[args.indexOf('--cwd') + 1]).toBe(join(cwd, 'child'));
         return stdout(child);
@@ -178,14 +183,14 @@ test('hc_run resolves an agent in the parent workspace and enables the HC report
       throw new Error(`Unexpected ${args[0]}`);
     }, cwd);
     await expect(
-      invoke('hc_run', {
+      invoke('hc_subagent', {
         name: 'review',
         agent: 'hc-test-reviewer',
         task: 'Review the change',
         model: 'other/model',
       }),
     ).rejects.toThrow('Model "other/model" is not allowed');
-    const output = await invoke('hc_run', {
+    const output = await invoke('hc_subagent', {
       name: 'review',
       agent: 'hc-test-reviewer',
       model: 'test/model-custom',
@@ -198,7 +203,7 @@ test('hc_run resolves an agent in the parent workspace and enables the HC report
   }
 });
 
-test('hc_run reports the migration warning for profiles using the old model field', async () => {
+test('hc_subagent reports the migration warning for profiles using the old model field', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));
   try {
     const agents = join(cwd, '.pi', 'agents');
@@ -209,7 +214,7 @@ test('hc_run reports the migration warning for profiles using the old model fiel
       throw new Error('Unexpected CLI call');
     }, cwd);
     await expect(
-      invoke('hc_run', { name: 'review', agent: 'hc-test-legacy', task: 'Review the change' }),
+      invoke('hc_subagent', { name: 'review', agent: 'hc-test-legacy', task: 'Review the change' }),
     ).rejects.toThrow(
       `${profile}: The \`model\` field is no longer supported. Please use \`models\` instead.`,
     );
@@ -218,7 +223,7 @@ test('hc_run reports the migration warning for profiles using the old model fiel
   }
 });
 
-test('hc_run preserves the child address when startup is blocked', async () => {
+test('hc_subagent preserves the child address when startup is blocked', async () => {
   const invoke = register(async (command, args) => {
     if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
     switch (args[0]) {
@@ -233,19 +238,19 @@ test('hc_run preserves the child address when startup is blocked', async () => {
     }
   });
   expect(
-    (await invoke('hc_run', { name: 'review', task: 'Review the change' })).details,
+    (await invoke('hc_subagent', { name: 'review', task: 'Review the change' })).details,
   ).toMatchObject({
     terminal: { address: 't5', status: 'blocked' },
     first_message: { sent: false, reason: expect.stringContaining('hc_read') },
   });
 });
 
-test('hc_run rejects the reserved agent label before invoking a CLI', async () => {
+test('hc_subagent rejects the reserved agent label before invoking a CLI', async () => {
   const invoke = register(async () => {
     throw new Error('Unexpected CLI call');
   });
   await expect(
-    invoke('hc_run', {
+    invoke('hc_subagent', {
       name: 'review',
       task: 'Review the change',
       labels: { 'pi-herdr-agents': 'other' },
@@ -256,10 +261,17 @@ test('hc_run rejects the reserved agent label before invoking a CLI', async () =
 test('hc_read, hc_stop, and hc_rm act on managed direct children', async () => {
   const finishedChild = { ...child, address: 't6', state: 'finished' };
   const commands: string[][] = [];
+  let childState = 'live';
   const invoke = register(async (_command, args) => {
     switch (args[0]) {
       case 'get':
+        if (args.at(-1) === child.address) return stdout({ ...child, state: childState });
+        if (args.at(-1) === finishedChild.address) return stdout(finishedChild);
         return stdout(args.at(-1) === self.address ? self : parent);
+      case 'kill':
+        commands.push(args);
+        childState = 'finished';
+        return stdout({ ok: true });
       case 'ls':
         return stdout({ terminals: [sibling, child, finishedChild] });
       default:
@@ -278,15 +290,16 @@ test('hc_read, hc_stop, and hc_rm act on managed direct children', async () => {
     'direct child',
   );
   await expect(invoke('hc_rm', { target: sibling.address })).rejects.toThrow('direct child');
-  await expect(invoke('hc_rm', { target: child.address })).rejects.toThrow(
-    'Only finished terminals can be removed.',
-  );
+  childState = 'live';
+  await invoke('hc_rm', { target: child.address });
   expect(commands).toEqual([
     ['read', '--json', '--lines', '40', '--', child.address],
     ['read', '--json', '--lines', '0', '--', finishedChild.address],
     ['interrupt', '--json', '--', child.address],
     ['kill', '--json', '--', child.address],
     ['rm', '--json', '--', finishedChild.address],
+    ['kill', '--json', '--', child.address],
+    ['rm', '--json', '--', child.address],
   ]);
 });
 
@@ -346,5 +359,102 @@ test('hc_send routes to the parent and managed peers, and rejects unrelated term
       'HC agent message from t2:\n\nCoordinate with sibling',
     ],
     ['send', '--json', '--', 't3', 'HC agent message from t2:\n\nCoordinate with sibling'],
+  ]);
+});
+
+test('hc_subagent places the child in a new, shared, or own tab', async () => {
+  const space = { 'herdr.space': 's1' };
+  const tabbed = { ...child, address: 't6', labels: { ...space, 'herdr.tab': 'tb-child' } };
+  let children = [child];
+  const runs: string[][] = [];
+  const invoke = register(async (command, args) => {
+    if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+    switch (args[0]) {
+      case 'get':
+        if (args.at(-1) === self.address) {
+          return stdout({ ...self, labels: { ...space, 'herdr.tab': 'tb-self' } });
+        }
+        if (args.at(-1) === tabbed.address) return stdout(tabbed);
+        return stdout({ ...child, status: { app: 'pi', state: 'idle' } });
+      case 'ls':
+        return stdout({ terminals: children });
+      case 'run':
+        runs.push(args.filter((arg) => arg.startsWith('herdr.')));
+        return stdout(child);
+      case 'wait':
+        return stdout({});
+      case 'send':
+        return stdout({ started: true, turn: 1 });
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+  await invoke('hc_subagent', { name: 'a', task: 'Work' });
+  await invoke('hc_subagent', { name: 'b', task: 'Work', tab: 'new' });
+  await invoke('hc_subagent', { name: 'c', task: 'Work', tab: 'shared' });
+  children = [child, tabbed];
+  await invoke('hc_subagent', { name: 'd', task: 'Work', tab: 'shared' });
+  await invoke('hc_subagent', { name: 'e', task: 'Work', tab: 'self' });
+  await expect(
+    invoke('hc_subagent', { name: 'f', task: 'Work', tab: 'new', labels: { 'herdr.tab': 'x' } }),
+  ).rejects.toThrow('conflicts with tab');
+  await expect(
+    invoke('hc_subagent', { name: 'g', task: 'Work', labels: { 'pi-herdr-agents.session': 'x' } }),
+  ).rejects.toThrow('reserved');
+  expect(runs).toEqual([
+    [],
+    ['herdr.space=s1'],
+    ['herdr.space=s1'],
+    ['herdr.space=s1', 'herdr.tab=tb-child'],
+    ['herdr.space=s1', 'herdr.tab=tb-self'],
+  ]);
+});
+
+test('hc_renew types /new, waits for a new session, and sends the new task', async () => {
+  let status = 'done';
+  let session: string | undefined = 's1';
+  const calls: string[][] = [];
+  const invoke = register(async (_command, args) => {
+    switch (args[0]) {
+      case 'get':
+        if (args.at(-1) === self.address) return stdout(self);
+        return stdout({
+          ...child,
+          labels: session ? { 'pi-herdr-agents.session': session } : {},
+          status: { app: 'pi', state: status },
+        });
+      case 'ls':
+        return stdout({ terminals: [child] });
+      case 'keys':
+        calls.push(args);
+        session = 's2';
+        return stdout({});
+      case 'wait':
+        return stdout({});
+      case 'send':
+        calls.push(args);
+        status = 'working';
+        return stdout({ started: true, turn: 1 });
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+
+  status = 'working';
+  await expect(invoke('hc_renew', { target: child.address, task: 'Next' })).rejects.toThrow(
+    'is working',
+  );
+  status = 'done';
+  session = undefined;
+  await expect(invoke('hc_renew', { target: child.address, task: 'Next' })).rejects.toThrow(
+    'does not report its session',
+  );
+  session = 's1';
+  status = 'idle';
+  const output = await invoke('hc_renew', { target: child.address, task: 'Next unit' });
+  expect(output.details).toMatchObject({ first_message: { sent: true } });
+  expect(calls).toEqual([
+    ['keys', '--json', '--', 't5', '/', 'n', 'e', 'w', 'enter'],
+    ['send', '--json', '--if', 'idle', '--', 't5', expect.stringContaining('Next unit')],
   ]);
 });

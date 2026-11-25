@@ -19,30 +19,106 @@ hc run --bg --name pi-lead -- "$(command -v pi)"
 hc attach pi-lead
 ```
 
-For a local checkout, run `pi -e .` from the repository directory inside an hc terminal, or run `pi install .` to add the checkout to Pi's package settings. The extension registers its tools when `HC_TERMINAL_ID` is set. `hc_run` explicitly loads the same extension in the child Pi process, which uses its own model configuration.
-
-| Tool | Usage |
-| --- | --- |
-| `hc_run` | Pass `name`, `task`, and optionally `agent`, `model`, `cwd`, and `labels`. The first task is delivered once the child Pi is idle. |
-| `hc_agents` | List the hc addresses and statuses of the current agent, its parent, its direct children, and its siblings. Set `include_finished` to include finished children and siblings. |
-| `hc_ls` | List live terminals visible to Herdr Core, including terminals on connected machines. Set `include_finished` to add finished terminals. Returns the JSON from `hc ls`. |
-| `hc_send` | Pass a `message`. Omit `target` to send it to the parent, or provide the address of a direct child or sibling. If Pi is working, it receives the message as a steering message. |
-| `hc_wait` | Wait for a specific `target`, or set `children` to `"any"` or `"all"` to wait for direct child terminals reported by hc. An incoming message or a timeout can end the wait early. |
-| `hc_read` | Read terminal output from a managed direct child by `target`. Optional `lines` defaults to 40 with a range of 0–200. |
-| `hc_stop` | Pass a managed direct child’s `target` and an `action`. `interrupt` stops its current turn and `kill` ends its program. |
-| `hc_rm` | Remove a managed direct child’s finished terminal by `target`. |
-
-Pass `labels` as a map of string values, such as `{"role":"reviewer","project":"docs"}`. Each entry becomes a separate `hc run --label key=value` argument. The extension reserves the `pi-herdr-agents` key for discovering its agents. Herdr Core treats an empty value as removing that label.
+For a local checkout, run `pi -e .` from the repository directory inside an hc terminal, or run `pi install .` to add the checkout to Pi's package settings. The extension registers its tools when `HC_TERMINAL_ID` is set. `hc_subagent` explicitly loads the same extension in the child Pi process, which uses its own model configuration.
 
 For example, ask the parent agent to delegate code review and testing to two subagents. They can find each other with `hc_agents`, exchange findings with `hc_send`, and report back to the parent when they finish or get blocked. You can open any terminal with `hc attach <address>`.
 
-Herdr Core delivers messages through Pi's input area. A successful send means hc delivered the message. The `started` field indicates whether hc observed a new turn. If `hc_run` returns `first_message.sent` as `false` or `null`, or `started` is `false`, inspect the terminal at the returned address. Respond to any approval prompt shown at startup. If the tool is canceled during delivery, use `hc_agents` to find the launched terminal by name.
-
 By default, child agents exit when the program in their parent terminal exits. The tools operate within a single Herdr Core instance.
+
+## Tools
+
+A *managed direct child* is a terminal this agent started with `hc_subagent`. Tools that take a `target` expect its address, as returned by `hc_subagent` or `hc_agents`.
+
+### `hc_subagent`
+
+Start an interactive Pi child in a new hc terminal and deliver its first task once Pi is idle. Unlike the blocking `subagent` tool from `pi-subagents`, `hc_subagent` is non-blocking: it returns once the task is delivered, and the child reports back with `hc_send`.
+
+| Parameter | Description |
+| --- | --- |
+| `name` | Required. Unique live terminal name: 1–32 of `a-z`, `0-9`, `-`, `_`. |
+| `task` | Required. The first task. The child is told to stay within it and report with `hc_send`. |
+| `agent` | Optional agent definition name. See [Agent definitions](#agent-definitions). |
+| `model` | Optional model ID or `provider/model` ID. It must be allowed by the agent’s `models`. Defaults to the first entry there. |
+| `cwd` | Optional working directory, relative to the parent’s workspace or absolute. Defaults to the parent’s workspace. |
+| `tab` | Optional placement in the Herdr window. See below. Defaults to `hidden`. |
+| `labels` | Optional map of string labels, such as `{"role":"reviewer"}`. Each entry becomes an `hc run --label key=value` argument. Keys starting with `pi-herdr-agents` are reserved, and so are `herdr.space` and `herdr.tab` when `tab` is set. An empty value removes the label. |
+
+| `tab` | Placement |
+| --- | --- |
+| `hidden` | No pane. The child runs in the background under its parent. |
+| `new` | A new tab in the parent’s space. |
+| `shared` | The tab of a live direct child that already has one, else a new tab. Children started this way gather in one tab. |
+| `self` | The parent’s own tab. |
+
+Every value except `hidden` requires the parent terminal to be in a Herdr space. The extension sets the `herdr.space` and `herdr.tab` labels for these placements.
+
+The result holds the child’s `terminal` and a `first_message` delivery status. A successful send means hc delivered the message, and `started` tells whether hc observed a new turn. If `first_message.sent` is `false` or `null`, or `started` is `false`, inspect the terminal at the returned address and respond to any approval prompt shown at startup. If the tool is canceled during delivery, use `hc_agents` to find the launched terminal by name.
+
+### `hc_renew`
+
+Give a finished child a new task in a fresh Pi session. The extension types `/new` into the child with `hc keys`, waits until the child reports a new session, and then sends the task. The process, terminal, address, pane, agent, and model stay. The result has the same shape as `hc_subagent`’s.
+
+| Parameter | Description |
+| --- | --- |
+| `target` | Required. A managed direct child whose status is `idle` or `done`. Interrupt a working child with `hc_stop` first. |
+| `task` | Required. The task for the new session. |
+
+A child publishes its Pi session ID in the `pi-herdr-agents.session` label at each session start, which lets `hc_renew` confirm that `/new` took effect. If the child’s editor holds a draft, the typed `/new` joins it and no new session starts; `hc_renew` then reports `first_message.sent: false`. To change the agent or model, close the child with `hc_rm` and start another.
+
+### `hc_send`
+
+Send a message to the parent, a direct child, or a sibling. An idle recipient starts a turn with it. A working recipient handles it by sender: a message from its parent steers the current run, arriving after the running tool calls finish. Messages from children and siblings are queued as follow-ups, which arrive once the run has no more tool calls, so reports do not interrupt the work in progress.
+
+| Parameter | Description |
+| --- | --- |
+| `message` | Required. The message text. |
+| `target` | Optional address of a direct child or sibling. Omit it to send to the parent. |
+
+### `hc_agents`
+
+List the hc addresses and statuses of this agent, its parent, its direct children, and its siblings.
+
+| Parameter | Description |
+| --- | --- |
+| `include_finished` | Optional. Set `true` to include finished children and siblings. |
+
+### `hc_ls`
+
+List terminals visible to Herdr Core, including those on connected machines. Returns the JSON from `hc ls`.
+
+| Parameter | Description |
+| --- | --- |
+| `include_finished` | Optional. Set `true` to include finished terminals. |
+
+### `hc_read`
+
+Read a managed direct child’s terminal output.
+
+| Parameter | Description |
+| --- | --- |
+| `target` | Required. A managed direct child. |
+| `lines` | Optional history lines, 0–200. Defaults to 40. |
+
+### `hc_stop`
+
+Stop a managed direct child.
+
+| Parameter | Description |
+| --- | --- |
+| `target` | Required. A managed direct child. |
+| `action` | Required. `interrupt` stops its current turn. `kill` ends its program. |
+
+### `hc_rm`
+
+Close a managed direct child. A running child’s program is ended first, then its terminal is removed.
+
+| Parameter | Description |
+| --- | --- |
+| `target` | Required. A managed direct child. |
 
 ## Agent definitions
 
-`hc_run` can use the same Agent Markdown files as `pi-subagents`. Put definitions in `~/.pi/agent/agents/` or `.pi/agents/` in the parent Pi workspace. Project definitions take precedence by frontmatter `name`. The child runs in the directory selected by `cwd`, where Pi discovers project context and skills.
+`hc_subagent` can use the same Agent Markdown files as `pi-subagents`. Put definitions in `~/.pi/agent/agents/` or `.pi/agents/` in the parent Pi workspace. Project definitions take precedence by frontmatter `name`. The child runs in the directory selected by `cwd`, where Pi discovers project context and skills.
 
 ```markdown
 ---
@@ -57,15 +133,15 @@ systemPrompt: replace
 Review the requested changes. Report actionable findings with file and line references.
 ```
 
-Invoke it with `hc_run({ "name": "review-auth", "agent": "reviewer", "task": "Review the authentication changes." })`. The `name` identifies the terminal. The `agent` selects the Markdown definition. Omit `agent` to launch a child with its usual Pi configuration, where the parent's delegation rules permit it.
+Invoke it with `hc_subagent({ "name": "review-auth", "agent": "reviewer", "task": "Review the authentication changes." })`. The `name` identifies the terminal. The `agent` selects the Markdown definition. Omit `agent` to launch a child with its usual Pi configuration, where the parent's delegation rules permit it.
 
 | Field | Behavior |
 | --- | --- |
 | `name`, `description` | Required profile name and optional summary. |
-| `models` | Optional comma-separated model IDs and `*` patterns. Pass `model` to `hc_run` to select an allowed model. With no selection, the first entry is used. A wildcard default uses the first available Pi model that matches. An omitted or empty list allows any selection. |
+| `models` | Optional comma-separated model IDs and `*` patterns. Pass `model` to `hc_subagent` to select an allowed model. With no selection, the first entry is used. A wildcard default uses the first available Pi model that matches. An omitted or empty list allows any selection. |
 | `thinking` | Optional Pi thinking level. Defaults to `off` for a named profile. |
 | `systemPrompt` | `append` (default) adds the body to the normal prompt. `replace` substitutes the default prompt and keeps project context. `replace-all` also disables project context. Both replacement modes include a tool list and guidelines from the active tools. |
-| `tools` | Optional comma-separated Pi tool list. `subagent` selects `hc_run`. HC includes `hc_send` and `hc_agents` for reporting and coordination. |
+| `tools` | Optional comma-separated Pi tool list. `subagent` selects `hc_subagent`. HC includes `hc_send` and `hc_agents` for reporting and coordination. |
 | `skills` | Comma-separated names or `*` patterns matched against skills available to the child Pi, including enabled package skills. Only matching skills are advertised in the prompt. |
 | `allowedAgents`, `maxDepth` | Optional comma-separated list of profiles available for HC delegation and maximum delegation depth (default `10`). Descendants inherit the applicable limits. `maxDepth: 0` prevents the named child from delegating. |
 | `debug` | Set to `true` to write `debug-system-prompt.md` in the child workspace when a turn starts. |
@@ -88,4 +164,5 @@ bun test
 
 - `extensions/index.ts` is the sole Pi extension entry point.
 - `extensions/hc-tools.ts` registers the tools, and `extensions/hc-client.ts` runs hc commands and resolves terminal relationships.
+- `extensions/hc-inbox.ts` turns incoming messages from children and siblings into follow-ups while Pi works.
 - `tests/` covers Pi package loading and tool behavior.

@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 export const agentLabel = 'pi-herdr-agents=agent';
+export const sessionLabelKey = 'pi-herdr-agents.session';
 
 interface ListedTerminal {
   address: string;
@@ -14,8 +15,9 @@ interface ListedTerminal {
   exit_code?: number | null;
 }
 
-interface Terminal extends Omit<ListedTerminal, 'status'> {
+export interface Terminal extends Omit<ListedTerminal, 'status'> {
   status?: { app?: string; state: string } | null;
+  labels?: Record<string, string>;
 }
 
 export interface Delivery {
