@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 - Do not register the HC tools in `pi-subagents` children, which inherit `HC_TERMINAL_ID` from the lead.
 - Restrict `hc_subagent` with the `allowedAgents` that `pi --agent` announces on `pi-subagents:configure`.
