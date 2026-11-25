@@ -1,4 +1,4 @@
-import { parseAgentProfile, type AgentProfile } from '@johnnywu/pi-agent-profiles';
+import { herdrAgentTools, parseAgentProfile, type AgentProfile } from '@johnnywu/pi-agent-profiles';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
@@ -68,15 +68,6 @@ export async function childPiArgs(
   if (agent?.systemPromptMode === 'replace-all') args.push('--no-context-files');
   if (model) args.push('--model', model);
   if (agent) args.push('--thinking', agent.thinking);
-  if (agent?.tools.length) {
-    const tools = agent.tools.map((tool) => tool.replace(/^([+-]?)subagent$/, '$1hc_subagent'));
-    const essential = ['hc_send', 'hc_agents'];
-    if (tools.every((tool) => /^[+-]/.test(tool))) {
-      tools.push(...essential.map((tool) => `+${tool}`));
-    } else {
-      tools.push(...essential);
-    }
-    args.push('--tools', tools.join(','));
-  }
+  if (agent?.tools.length) args.push('--tools', herdrAgentTools(agent.tools).join(','));
   return args;
 }

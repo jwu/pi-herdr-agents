@@ -19,7 +19,7 @@ hc run --bg --name pi-lead -- "$(command -v pi)"
 hc attach pi-lead
 ```
 
-For a local checkout, run `pi -e .` from the repository directory inside an hc terminal, or run `pi install .` to add the checkout to Pi's package settings. The extension registers its tools when `HC_TERMINAL_ID` is set. `hc_subagent` explicitly loads the same extension in the child Pi process, which uses its own model configuration.
+For a local checkout, run `pi -e .` from the repository directory inside an hc terminal, or run `pi install .` to add the checkout to Pi's package settings. The extension registers its tools when `HC_TERMINAL_ID` is set, except in `pi-subagents` children, which inherit that variable without owning the terminal. When the lead runs as `pi --agent <name>` with pi-config's custom-agent, the profile's `allowedAgents` also restricts `hc_subagent`. `hc_subagent` explicitly loads the same extension in the child Pi process, which uses its own model configuration.
 
 For example, ask the parent agent to delegate code review and testing to two subagents. They can find each other with `hc_agents`, exchange findings with `hc_send`, and report back to the parent when they finish or get blocked. You can open any terminal with `hc attach <address>`.
 
@@ -141,7 +141,7 @@ Invoke it with `hc_subagent({ "name": "review-auth", "agent": "reviewer", "task"
 | `models` | Optional comma-separated model IDs and `*` patterns. Pass `model` to `hc_subagent` to select an allowed model. With no selection, the first entry is used. A wildcard default uses the first available Pi model that matches. An omitted or empty list allows any selection. |
 | `thinking` | Optional Pi thinking level. Defaults to `off` for a named profile. |
 | `systemPrompt` | `append` (default) adds the body to the normal prompt. `replace` substitutes the default prompt and keeps project context. `replace-all` also disables project context. Both replacement modes include a tool list and guidelines from the active tools. |
-| `tools` | Optional comma-separated Pi tool list. `subagent` selects `hc_subagent`. HC includes `hc_send` and `hc_agents` for reporting and coordination. |
+| `tools` | Optional comma-separated Pi tool list. `subagent` selects `hc_subagent`, `hc_renew`, `hc_read`, `hc_stop`, and `hc_rm`. HC includes `hc_send` and `hc_agents` for reporting and coordination. |
 | `skills` | Comma-separated names or `*` patterns matched against skills available to the child Pi, including enabled package skills. Only matching skills are advertised in the prompt. |
 | `allowedAgents`, `maxDepth` | Optional comma-separated list of profiles available for HC delegation and maximum delegation depth (default `10`). Descendants inherit the applicable limits. `maxDepth: 0` prevents the named child from delegating. |
 | `debug` | Set to `true` to write `debug-system-prompt.md` in the child workspace when a turn starts. |

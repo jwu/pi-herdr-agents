@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Do not register the HC tools in `pi-subagents` children, which inherit `HC_TERMINAL_ID` from the lead.
+- Restrict `hc_subagent` with the `allowedAgents` that `pi --agent` announces on `pi-subagents:configure`.
+- Map a profile's `subagent` tool to all child management tools (`hc_subagent`, `hc_renew`, `hc_read`, `hc_stop`, `hc_rm`) through `herdrAgentTools` from `@johnnywu/pi-agent-profiles`.
+
 ## 0.3.0
 
 - Rename `hc_run` to `hc_subagent` and describe it as non-blocking, unlike the blocking `subagent` tool from `pi-subagents`.

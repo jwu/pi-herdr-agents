@@ -172,7 +172,7 @@ test('hc_subagent resolves an agent in the parent workspace and enables the HC r
           '--thinking',
           'high',
           '--tools',
-          'read,hc_subagent,hc_send,hc_agents',
+          'read,hc_subagent,hc_renew,hc_read,hc_stop,hc_rm,hc_send,hc_agents',
         ]);
         expect(args[args.indexOf('--cwd') + 1]).toBe(join(cwd, 'child'));
         return stdout(child);
