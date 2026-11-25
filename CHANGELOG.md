@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - **Breaking:** Make delegation opt-in for children. A child gets `hc_subagent`, `hc_renew`, `hc_read`, `hc_stop`, and `hc_rm` only when its profile's `tools` selects them, with `subagent`, `+subagent`, or the tool names. A child launched without `agent`, or with a profile that has no `tools`, no longer gets them.
 - Withhold all five delegation tools, instead of `hc_subagent` alone, from a child at its depth limit or with no allowed agent left.
