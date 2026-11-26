@@ -564,12 +564,75 @@ test('hc_subagent places the child in a new, shared, or own tab', async () => {
   ).rejects.toThrow('reserved');
   expect(runs).toEqual([
     [],
-    ['herdr.space=s1'],
-    ['herdr.space=s1'],
+    ['herdr.space=s1', expect.stringMatching(/^herdr\.tab=.+/)],
+    ['herdr.space=s1', expect.stringMatching(/^herdr\.tab=.+/)],
     ['herdr.space=s1', 'herdr.tab=tb-child'],
     ['herdr.space=s1', 'herdr.tab=tb-self'],
   ]);
+  expect(runs[1]![1]).not.toBe(runs[2]![1]);
 });
+
+test.each(['sequential', 'concurrent'])(
+  'hc_subagent shares a tab across %s launches and replaces it after children leave',
+  async (mode) => {
+    const terminals: Array<typeof child & { labels: Record<string, string> }> = [];
+    const invoke = register(async (command, args) => {
+      if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+      switch (args[0]) {
+        case 'get':
+          if (args.at(-1) === self.address) {
+            return stdout({ ...self, labels: { 'herdr.space': 's1', 'herdr.tab': 'self' } });
+          }
+          return stdout({
+            ...terminals.find(({ address }) => address === args.at(-1)),
+            status: { app: 'pi', state: 'idle' },
+          });
+        case 'ls':
+          return stdout({ terminals: [...terminals] });
+        case 'run': {
+          const labels: Record<string, string> = {};
+          for (let i = 0; i < args.length; i++) {
+            if (args[i] === '--label') {
+              const [key, value] = args[++i]!.split('=', 2);
+              labels[key!] = value!;
+            }
+          }
+          const terminal = { ...child, address: `t${terminals.length + 10}`, labels };
+          terminals.push(terminal);
+          return stdout(terminal);
+        }
+        case 'wait':
+          return stdout({});
+        case 'send':
+          return stdout({ started: true });
+        default:
+          throw new Error(`Unexpected ${args[0]}`);
+      }
+    });
+    const launch = (name: string, tab: string) =>
+      invoke('hc_subagent', { name, task: 'Work', tab });
+    if (mode === 'concurrent') {
+      await Promise.all([launch('a', 'shared'), launch('b', 'shared')]);
+    } else {
+      await launch('a', 'shared');
+      await launch('b', 'shared');
+    }
+    const shared = terminals[0]!.labels['herdr.tab'];
+    expect(shared).toBeTruthy();
+    expect(terminals[1]!.labels['herdr.tab']).toBe(shared);
+    await launch('c', 'new');
+    await launch('d', 'new');
+    expect(terminals[2]!.labels['herdr.tab']).toBeTruthy();
+    expect(terminals[3]!.labels['herdr.tab']).toBeTruthy();
+    expect(
+      new Set([shared, terminals[2]!.labels['herdr.tab'], terminals[3]!.labels['herdr.tab']]).size,
+    ).toBe(3);
+    terminals.length = 0;
+    await launch('e', 'shared');
+    expect(terminals[0]!.labels['herdr.tab']).toBeTruthy();
+    expect(terminals[0]!.labels['herdr.tab']).not.toBe(shared);
+  },
+);
 
 test('hc_renew types /new, waits for a new session, and sends the new task', async () => {
   let status = 'done';
