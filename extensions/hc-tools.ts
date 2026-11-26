@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { randomBytes } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { Type } from 'typebox';
 import {
@@ -116,6 +117,7 @@ export function registerHcTools(
   getScope?: () => AgentScope | undefined,
 ) {
   const client = (signal?: AbortSignal) => new HcClient(pi.exec.bind(pi), signal);
+  let sharedLaunch = Promise.resolve();
   // Other machines know this one by its core ID, so messages to them carry it.
   let coreId: Promise<string> | undefined;
   const globalAddress = (hc: HcClient) =>
@@ -196,7 +198,8 @@ export function registerHcTools(
         }
       }
     }
-    return ['--label', `herdr.space=${space}`, ...(tabId ? ['--label', `herdr.tab=${tabId}`] : [])];
+    tabId ??= `tb${randomBytes(16).toString('hex')}`;
+    return ['--label', `herdr.space=${space}`, '--label', `herdr.tab=${tabId}`];
   }
 
   async function startTask(hc: HcClient, child: string, message: string, signal?: AbortSignal) {
@@ -360,30 +363,39 @@ export function registerHcTools(
       const sessionDir = childSessionDir(ctx.sessionManager.getSessionDir(), ctx.cwd, childCwd);
       if (sessionDir) command.push('--session-dir', sessionDir);
       const hc = client(signal);
-      const placement = await tabLabels(hc, tab);
 
       // HC starts terminals with the server environment. Pi launchers use PATH to find Node.
       const env =
         process.platform !== 'win32' && process.env.PATH
           ? ['/usr/bin/env', `PATH=${process.env.PATH}`]
           : [];
-      const terminal = await hc.run([
-        '--bg',
-        '--no-notify',
-        '--name',
-        name,
-        '--cwd',
-        childCwd,
-        '--label',
-        agentLabel,
-        ...placement,
-        ...labelArgs,
-        '--parent',
-        address,
-        '--',
-        ...env,
-        ...command,
-      ]);
+      const launch = async () =>
+        hc.run([
+          '--bg',
+          '--no-notify',
+          '--name',
+          name,
+          '--cwd',
+          childCwd,
+          '--label',
+          agentLabel,
+          ...(await tabLabels(hc, tab)),
+          ...labelArgs,
+          '--parent',
+          address,
+          '--',
+          ...env,
+          ...command,
+        ]);
+      const pending = tab === 'shared' ? sharedLaunch.then(launch) : launch();
+      if (tab === 'shared') {
+        // Let the next launch see this child before it chooses a tab.
+        sharedLaunch = pending.then(
+          () => {},
+          () => {},
+        );
+      }
+      const terminal = await pending;
       const started = await startTask(hc, terminal.address, message, signal);
       return result({ ...started, terminal: started.terminal ?? terminal });
     },
