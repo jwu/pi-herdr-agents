@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - Store child sessions in an `hc-children` subdirectory so they stay out of `/resume`.
 
