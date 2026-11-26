@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { homedir } from 'node:os';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { Type } from 'typebox';
 import {
   loadAgentDefinitions,
@@ -35,8 +34,7 @@ const taskParam = Type.String({
 const includeFinishedParam = Type.Optional(
   Type.Boolean({ description: 'Include finished terminals. Defaults to false.' }),
 );
-const workerSessionDirFlag = 'hc-worker-session-dir';
-const cwdSlugPlaceholder = '<cwd-slug>';
+const childSessionsDir = 'hc-children';
 const reservedLabel = agentLabel.split('=')[0];
 const placementLabels = ['herdr.space', 'herdr.tab'];
 type Tab = 'hidden' | 'new' | 'shared' | 'self';
@@ -95,16 +93,28 @@ async function related(hc: HcClient, family: Family, address?: string) {
   return terminal;
 }
 
+// Pi names a workspace's default session directory after its cwd.
+function sessionSlug(cwd: string) {
+  return `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+}
+
+// Pi lists a workspace's sessions from the top level of its session directory, so children store
+// theirs one level down and stay out of /resume. A parent in Pi's default layout places a child
+// under the child's own workspace; a parent with a custom session directory keeps children in it.
+// Returns undefined when the parent does not persist sessions.
+export function childSessionDir(parentDir: string, parentCwd: string, childCwd: string) {
+  if (!parentDir) return undefined;
+  const dir = basename(parentDir) === childSessionsDir ? dirname(parentDir) : parentDir;
+  if (basename(dir) !== sessionSlug(parentCwd)) return join(dir, childSessionsDir);
+  return join(dirname(dir), sessionSlug(childCwd), childSessionsDir);
+}
+
 export function registerHcTools(
-  pi: Pick<ExtensionAPI, 'exec' | 'getFlag' | 'registerFlag' | 'registerTool'>,
+  pi: Pick<ExtensionAPI, 'exec' | 'registerTool'>,
   address: string,
   extensionPath: string,
   getScope?: () => AgentScope | undefined,
 ) {
-  pi.registerFlag(workerSessionDirFlag, {
-    type: 'string',
-    description: 'Base directory or <cwd-slug> path template for HC child Pi sessions',
-  });
   const client = (signal?: AbortSignal) => new HcClient(pi.exec.bind(pi), signal);
   // Other machines know this one by its core ID, so messages to them carry it.
   let coreId: Promise<string> | undefined;
@@ -347,21 +357,8 @@ export function registerHcTools(
       });
       const command = await piCommand(agent, model, signal, ctx);
       const childCwd = resolve(ctx.cwd, cwd ?? '.');
-      const flagDir = pi.getFlag(workerSessionDirFlag);
-      const configuredDir =
-        (typeof flagDir === 'string' && flagDir.length > 0 ? flagDir : undefined) ||
-        process.env.PI_HERDR_AGENTS_WORKER_SESSION_DIR;
-      if (configuredDir) {
-        const homeRelative = configuredDir.startsWith('~/') || configuredDir.startsWith(`~${sep}`);
-        const path = homeRelative ? join(homedir(), configuredDir.slice(2)) : configuredDir;
-        const template = configuredDir === '~' ? homedir() : resolve(ctx.cwd, path);
-        // Match Pi's default session directory naming without creating that directory.
-        const slug = `--${childCwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
-        const sessionDir = template.includes(cwdSlugPlaceholder)
-          ? template.replaceAll(cwdSlugPlaceholder, () => slug)
-          : join(template, slug);
-        command.push('--session-dir', sessionDir, `--${workerSessionDirFlag}`, template);
-      }
+      const sessionDir = childSessionDir(ctx.sessionManager.getSessionDir(), ctx.cwd, childCwd);
+      if (sessionDir) command.push('--session-dir', sessionDir);
       const hc = client(signal);
       const placement = await tabLabels(hc, tab);
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Allow HC workers to store sessions separately with `--hc-worker-session-dir` or `PI_HERDR_AGENTS_WORKER_SESSION_DIR`, including a per-workspace `<cwd-slug>` template.
+- Store child sessions in an `hc-children` subdirectory so they stay out of `/resume`.
 
 ## 0.6.0
 

@@ -31,18 +31,9 @@ Every Pi that runs this extension labels its terminal at each session start: `pi
 
 Peers can message each other with `hc_send` and read each other with `hc_read`. They cannot stop, renew, or remove each other. Each machine must run this version of the extension, and a peer can reply only if its machine has added the sender's machine. A message to a remote peer names the sender by its Herdr Core ID, such as `<core-id>/t2`, which the receiving hc resolves to its own name for that machine.
 
-### Worker session storage
+### Child sessions
 
-To keep newly launched workers out of the lead's `/resume` list, set `PI_HERDR_AGENTS_WORKER_SESSION_DIR` or start the lead with `--hc-worker-session-dir`. A non-empty flag takes precedence over the environment variable; empty values are ignored.
-
-```sh
-hc run --bg --name pi-lead -- "$(command -v pi)" \
-  --hc-worker-session-dir '~/.pi/agent/sessions/_hc-workers'
-```
-
-Each `hc_subagent` passes `--session-dir` to the worker. A base directory gets a subdirectory named the same way Pi names its default per-workspace session directories, such as `--home-alex-project--` for `/home/alex/project`. Use a quoted `<cwd-slug>` placeholder to place that name elsewhere in the path, for example `'~/worker-history/<cwd-slug>/sessions'`. `~` refers to your home directory, and relative paths resolve against the lead's workspace.
-
-Descendant workers inherit the template and use their own working directory to compute the slug. Renewed workers keep their session directory when `hc_renew` starts a fresh session. If neither setting is provided, workers use Pi's usual session storage.
+Children store their Pi sessions in an `hc-children` subdirectory, so they stay out of the parent workspace's `/resume` list. With Pi's default storage, each child uses the directory of its own workspace, such as `~/.pi/agent/sessions/--home-alex-project--/hc-children`. If the parent uses a custom session directory, its children share `hc-children` inside it. A parent that does not save sessions leaves its children's storage unchanged. Renewed children keep their directory, and `hc_read` still finds their transcripts.
 
 ## Tools
 
