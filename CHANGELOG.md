@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Allow HC workers to store sessions separately with `--hc-worker-session-dir` or `PI_HERDR_AGENTS_WORKER_SESSION_DIR`, including a per-workspace `<cwd-slug>` template.
+
 ## 0.6.0
 
 - Add peers: other root Pi sessions that run this extension, on this machine or a connected one. A root terminal lists them in `hc_agents`, messages them with `hc_send`, and reads them with `hc_read`. A message to a remote peer names the sender by its Herdr Core ID so the peer can reply.

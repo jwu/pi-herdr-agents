@@ -6,8 +6,8 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { parseAgentProfile } from '@johnnywu/pi-agent-profiles';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { childPiArgs } from '../extensions/agent-profiles.ts';
 import { registerHcTools } from '../extensions/hc-tools.ts';
 
@@ -24,11 +24,13 @@ const unrelated = { ...sibling, address: 't4', parent: 't8' };
 const child = { ...self, address: 't5', parent: self.address };
 const delegationTools = 'hc_subagent,hc_renew,hc_read,hc_stop,hc_rm';
 
-function register(exec: ExtensionAPI['exec'], cwd = workspace) {
+function register(exec: ExtensionAPI['exec'], cwd = workspace, workerSessionDir?: string) {
   const tools = new Map<string, ToolDefinition>();
   registerHcTools(
     {
       exec,
+      getFlag: (name) => (name === 'hc-worker-session-dir' ? workerSessionDir : undefined),
+      registerFlag() {},
       registerTool(tool) {
         tools.set(tool.name, tool as ToolDefinition);
       },
@@ -138,6 +140,104 @@ test('hc_subagent launches an interactive child and waits for idle before sendin
     first_message: { sent: true, started: true },
   });
 });
+
+test.each([
+  ['~/.pi/agent/sessions/_hc-workers', join(homedir(), '.pi', 'agent', 'sessions', '_hc-workers')],
+  ['worker sessions/<cwd-slug>/history', resolve('/lead', 'worker sessions/<cwd-slug>/history')],
+])('hc_subagent resolves the worker session directory from %s', async (option, template) => {
+  const leadCwd = resolve('/lead');
+  const workerCwd = join(leadCwd, 'child workspace');
+  const drive = process.platform === 'win32' ? `${leadCwd[0]}--` : '';
+  const slug = `--${drive}lead-child workspace--`;
+  const expectedDir = option.includes('<cwd-slug>')
+    ? resolve('/lead', 'worker sessions', slug, 'history')
+    : join(template, slug);
+  const runs: string[][] = [];
+  const invoke = register(
+    async (command, args) => {
+      if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+      if (args[0] === 'run') {
+        runs.push(args);
+        return stdout(child);
+      }
+      if (args[0] === 'wait') return stdout({});
+      if (args[0] === 'get') return stdout({ ...child, status: { app: 'pi', state: 'idle' } });
+      if (args[0] === 'send') return stdout({ started: true });
+      throw new Error(`Unexpected ${args[0]}`);
+    },
+    leadCwd,
+    option,
+  );
+
+  await invoke('hc_subagent', { name: 'review', task: 'Review this', cwd: 'child workspace' });
+  expect(runs).toHaveLength(1);
+  const args = runs[0]!;
+  expect(args[args.indexOf('--cwd') + 1]).toBe(workerCwd);
+  expect(args.slice(args.indexOf('--') + 1)).toEqual([
+    ...env,
+    executable,
+    '-e',
+    '/package/extensions/index.ts',
+    '--hc-agent-profile',
+    JSON.stringify({ depth: 1 }),
+    '--exclude-tools',
+    delegationTools,
+    '--session-dir',
+    expectedDir,
+    '--hc-worker-session-dir',
+    template,
+  ]);
+});
+
+test.each([
+  ['/env-workers', undefined, '/env-workers'],
+  ['/env-workers', '/flag-workers', '/flag-workers'],
+  ['/env-workers', '', '/env-workers'],
+  ['', undefined, undefined],
+  [undefined, undefined, undefined],
+])(
+  'hc_subagent chooses session directory from env %s and flag %s',
+  async (envDir, flagDir, expected) => {
+    const previous = process.env.PI_HERDR_AGENTS_WORKER_SESSION_DIR;
+    if (envDir === undefined) delete process.env.PI_HERDR_AGENTS_WORKER_SESSION_DIR;
+    else process.env.PI_HERDR_AGENTS_WORKER_SESSION_DIR = envDir;
+    try {
+      const runs: string[][] = [];
+      const invoke = register(
+        async (command, args) => {
+          if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+          if (args[0] === 'run') {
+            runs.push(args);
+            return stdout(child);
+          }
+          if (args[0] === 'wait') return stdout({});
+          if (args[0] === 'get') return stdout({ ...child, status: { app: 'pi', state: 'idle' } });
+          if (args[0] === 'send') return stdout({ started: true });
+          throw new Error(`Unexpected ${args[0]}`);
+        },
+        '/lead',
+        flagDir,
+      );
+      await invoke('hc_subagent', { name: 'review', task: 'Review this' });
+      const args = runs[0]!;
+      const index = args.indexOf('--session-dir');
+      if (expected) {
+        expect(args.slice(index, index + 4)).toEqual([
+          '--session-dir',
+          join(expected, '--lead--'),
+          '--hc-worker-session-dir',
+          expected,
+        ]);
+      } else {
+        expect(index).toBe(-1);
+        expect(args).not.toContain('--hc-worker-session-dir');
+      }
+    } finally {
+      if (previous === undefined) delete process.env.PI_HERDR_AGENTS_WORKER_SESSION_DIR;
+      else process.env.PI_HERDR_AGENTS_WORKER_SESSION_DIR = previous;
+    }
+  },
+);
 
 test('hc_subagent resolves an agent in the parent workspace and enables the HC reporting tools', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'hc-profile-'));

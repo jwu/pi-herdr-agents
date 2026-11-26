@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { isAbsolute, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import { Type } from 'typebox';
 import {
   loadAgentDefinitions,
@@ -34,6 +35,8 @@ const taskParam = Type.String({
 const includeFinishedParam = Type.Optional(
   Type.Boolean({ description: 'Include finished terminals. Defaults to false.' }),
 );
+const workerSessionDirFlag = 'hc-worker-session-dir';
+const cwdSlugPlaceholder = '<cwd-slug>';
 const reservedLabel = agentLabel.split('=')[0];
 const placementLabels = ['herdr.space', 'herdr.tab'];
 type Tab = 'hidden' | 'new' | 'shared' | 'self';
@@ -93,11 +96,15 @@ async function related(hc: HcClient, family: Family, address?: string) {
 }
 
 export function registerHcTools(
-  pi: Pick<ExtensionAPI, 'exec' | 'registerTool'>,
+  pi: Pick<ExtensionAPI, 'exec' | 'getFlag' | 'registerFlag' | 'registerTool'>,
   address: string,
   extensionPath: string,
   getScope?: () => AgentScope | undefined,
 ) {
+  pi.registerFlag(workerSessionDirFlag, {
+    type: 'string',
+    description: 'Base directory or <cwd-slug> path template for HC child Pi sessions',
+  });
   const client = (signal?: AbortSignal) => new HcClient(pi.exec.bind(pi), signal);
   // Other machines know this one by its core ID, so messages to them carry it.
   let coreId: Promise<string> | undefined;
@@ -339,6 +346,22 @@ export function registerHcTools(
         return ['--label', `${key}=${value}`];
       });
       const command = await piCommand(agent, model, signal, ctx);
+      const childCwd = resolve(ctx.cwd, cwd ?? '.');
+      const flagDir = pi.getFlag(workerSessionDirFlag);
+      const configuredDir =
+        (typeof flagDir === 'string' && flagDir.length > 0 ? flagDir : undefined) ||
+        process.env.PI_HERDR_AGENTS_WORKER_SESSION_DIR;
+      if (configuredDir) {
+        const homeRelative = configuredDir.startsWith('~/') || configuredDir.startsWith(`~${sep}`);
+        const path = homeRelative ? join(homedir(), configuredDir.slice(2)) : configuredDir;
+        const template = configuredDir === '~' ? homedir() : resolve(ctx.cwd, path);
+        // Match Pi's default session directory naming without creating that directory.
+        const slug = `--${childCwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+        const sessionDir = template.includes(cwdSlugPlaceholder)
+          ? template.replaceAll(cwdSlugPlaceholder, () => slug)
+          : join(template, slug);
+        command.push('--session-dir', sessionDir, `--${workerSessionDirFlag}`, template);
+      }
       const hc = client(signal);
       const placement = await tabLabels(hc, tab);
 
@@ -353,7 +376,7 @@ export function registerHcTools(
         '--name',
         name,
         '--cwd',
-        resolve(ctx.cwd, cwd ?? '.'),
+        childCwd,
         '--label',
         agentLabel,
         ...placement,
