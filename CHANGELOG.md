@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.1
 
 - Fix shared tab placement for concurrent child launches.
 
