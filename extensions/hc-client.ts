@@ -2,6 +2,9 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 export const agentLabel = 'pi-herdr-agents=agent';
 export const sessionLabelKey = 'pi-herdr-agents.session';
+export const sessionFileLabelKey = 'pi-herdr-agents.session-file';
+/** Marks a Pi that runs this extension. The value is the peer protocol version. */
+export const peerLabel = 'pi-herdr-agents.peer=1';
 
 interface ListedTerminal {
   address: string;
@@ -64,12 +67,17 @@ export class HcClient {
     private readonly signal?: AbortSignal,
   ) {}
 
-  async command<T = unknown>(command: string, args: string[], timeout = 15_000): Promise<T> {
+  async command<T = unknown>(
+    command: string,
+    args: string[],
+    timeout = 15_000,
+    maxBuffer = 4 * 1024 * 1024,
+  ): Promise<T> {
     this.signal?.throwIfAborted();
     const result = await this.exec('hc', [command, '--json', ...args], {
       signal: this.signal,
       timeout,
-      maxBuffer: 4 * 1024 * 1024,
+      maxBuffer,
     });
     this.signal?.throwIfAborted();
     if (result.truncated) throw new Error(`hc ${command} exceeded its output limit.`);
@@ -98,10 +106,17 @@ export class HcClient {
 
   async family(address: string) {
     const self = await this.get(address);
-    const { terminals } = await this.command<{ terminals: ListedTerminal[] }>('ls', [
-      '--all',
-      '--label',
-      agentLabel,
+    const list = (label: string) =>
+      this.command<{ terminals: ListedTerminal[] }>('ls', ['--all', '--label', label]);
+    // Peers are other root Pi sessions, on this machine or a connected one. Only a root has them,
+    // so a child cannot reach its own ancestors this way.
+    const [{ terminals }, peers] = await Promise.all([
+      list(agentLabel),
+      self.parent
+        ? []
+        : list(peerLabel).then(({ terminals }) =>
+            terminals.filter((terminal) => !terminal.parent && terminal.address !== self.address),
+          ),
     ]);
     const local = terminals.filter((terminal) => !terminal.address.includes('/'));
     const parent =
@@ -112,7 +127,7 @@ export class HcClient {
           (terminal) => terminal.parent === self.parent && terminal.address !== self.address,
         )
       : [];
-    return { self: summarizeTerminal(self), parent, children, siblings };
+    return { self: summarizeTerminal(self), parent, children, siblings, peers };
   }
 
   private async getParent(address: string) {

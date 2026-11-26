@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add peers: other root Pi sessions that run this extension, on this machine or a connected one. A root terminal lists them in `hc_agents`, messages them with `hc_send`, and reads them with `hc_read`. A message to a remote peer names the sender by its Herdr Core ID so the peer can reply.
+- Label every Pi, roots included, with `pi-herdr-agents.peer=1`, its session ID, and its session file at each session start.
+- **Breaking:** Replace `hc_read`'s `lines` with `source` (`auto`, `transcript`, or `screen`) and `limit`. `auto` reads the last messages of the target's Pi session and falls back to the screen. Results now include the target's `state` and `status`. History reads are gone, since Pi's full-screen interface has no scrollback.
+
 ## 0.5.0
 
 - Count a profile's `maxDepth` from the agent's own level instead of from the lead, matching `pi-subagents`. A profile with `maxDepth: 1` can now delegate one level wherever it runs. The limit still passes down the chain, and a descendant can tighten it but not widen it.

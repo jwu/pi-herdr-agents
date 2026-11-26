@@ -382,7 +382,7 @@ test('hc_read, hc_stop, and hc_rm act on managed direct children', async () => {
   });
 
   await invoke('hc_read', { target: child.address });
-  await invoke('hc_read', { target: finishedChild.address, lines: 0 });
+  await invoke('hc_read', { target: finishedChild.address, source: 'screen' });
   await invoke('hc_stop', { target: child.address, action: 'interrupt' });
   await invoke('hc_stop', { target: child.address, action: 'kill' });
   await invoke('hc_rm', { target: finishedChild.address });
@@ -394,7 +394,7 @@ test('hc_read, hc_stop, and hc_rm act on managed direct children', async () => {
   childState = 'live';
   await invoke('hc_rm', { target: child.address });
   expect(commands).toEqual([
-    ['read', '--json', '--lines', '40', '--', child.address],
+    ['read', '--json', '--lines', '0', '--', child.address],
     ['read', '--json', '--lines', '0', '--', finishedChild.address],
     ['interrupt', '--json', '--', child.address],
     ['kill', '--json', '--', child.address],
@@ -439,7 +439,9 @@ test('hc_send routes to the parent and managed peers, and rejects unrelated term
   });
   await invoke('hc_send', { message: 'Report to parent' });
   await invoke('hc_send', { target: 't3', message: 'Coordinate with sibling' });
-  await expect(invoke('hc_send', { target: 't4', message: 'Outside' })).rejects.toThrow('outside');
+  await expect(invoke('hc_send', { target: 't4', message: 'Outside' })).rejects.toThrow(
+    'not your parent',
+  );
   expect(sends).toEqual([
     [
       'send',
@@ -558,4 +560,250 @@ test('hc_renew types /new, waits for a new session, and sends the new task', asy
     ['keys', '--json', '--', 't5', '/', 'n', 'e', 'w', 'enter'],
     ['send', '--json', '--if', 'idle', '--', 't5', expect.stringContaining('Next unit')],
   ]);
+});
+
+const root = { address: 't2', parent: null, state: 'live' };
+const peerLabel = 'pi-herdr-agents.peer=1';
+
+test('a root lists peers on any machine and messages remote peers with its global address', async () => {
+  const localPeer = { address: 't7', parent: null, state: 'live', agent: 'pi', status: 'done' };
+  const remotePeer = { address: 'm5/t3', parent: null, state: 'live', agent: 'pi', status: 'idle' };
+  const remoteChild = { address: 'm5/t4', parent: 't3', state: 'live' };
+  const sends: string[][] = [];
+  const invoke = register(async (_command, args) => {
+    switch (args[0]) {
+      case 'get':
+        switch (args.at(-1)) {
+          case root.address:
+            return stdout(root);
+          case localPeer.address:
+            return stdout({ ...localPeer, status: { app: 'pi', state: 'done' } });
+          case remotePeer.address:
+          case 'core-m5/t3':
+            return stdout({ ...remotePeer, status: { app: 'pi', state: 'idle' } });
+          default:
+            return { ...stdout(null), code: 3, stderr: '{"error":{"kind":"not_found"}}' };
+        }
+      case 'ls':
+        return stdout({
+          terminals: args.at(-1) === peerLabel ? [root, localPeer, remotePeer, remoteChild] : [],
+        });
+      case 'server':
+        expect(args).toEqual(['server', '--json', 'status']);
+        return stdout({ core: { id: 'core-m4', name: 'm4' } });
+      case 'send':
+        sends.push(args);
+        return stdout({ started: true, turn: 1 });
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+
+  expect((await invoke('hc_agents', {})).details).toMatchObject({
+    parent: null,
+    peers: [{ address: 't7' }, { address: 'm5/t3' }],
+  });
+  // A reply uses the address from the hc envelope, which names the machine by its core ID.
+  await invoke('hc_send', { target: 'core-m5/t3', message: 'Remote' });
+  await invoke('hc_send', { target: 't7', message: 'Local' });
+  await expect(invoke('hc_send', { target: 'm5/t4', message: 'Not a root' })).rejects.toThrow(
+    'not your parent',
+  );
+  await expect(invoke('hc_send', { target: 'm6/t1', message: 'Unknown' })).rejects.toThrow(
+    'not your parent',
+  );
+  expect(sends).toEqual([
+    [
+      'send',
+      '--json',
+      '--if',
+      'idle',
+      '--',
+      'm5/t3',
+      'HC agent message from core-m4/t2:\n\nRemote',
+    ],
+    ['send', '--json', '--', 't7', 'HC agent message from t2:\n\nLocal'],
+  ]);
+});
+
+function sessionFile(lines: object[]) {
+  return [{ type: 'session', version: 3, id: 's1' }, ...lines].map((line) => JSON.stringify(line));
+}
+
+function readPeer(options: {
+  lines: string[];
+  labels?: Record<string, string>;
+  status?: string;
+  address?: string;
+}) {
+  const address = options.address ?? 'm5/t3';
+  const peer = {
+    address,
+    parent: null,
+    state: 'live',
+    status: { app: 'pi', state: options.status ?? 'done' },
+    labels: options.labels ?? {
+      'pi-herdr-agents.session': 's1',
+      'pi-herdr-agents.session-file': '/home/u/.pi/agent/sessions/--x--/s1.jsonl',
+    },
+  };
+  const reads: string[][] = [];
+  const invoke = register(async (_command, args) => {
+    switch (args[0]) {
+      case 'get':
+        return stdout(args.at(-1) === root.address ? root : peer);
+      case 'ls':
+        return stdout({ terminals: args.at(-1) === peerLabel ? [root, peer] : [] });
+      case 'read':
+        reads.push(args);
+        return stdout({ text: 'screen text', complete: true, how: 'screen' });
+      case 'file': {
+        reads.push(args);
+        const offset = Number(args[args.indexOf('--offset') + 1]);
+        const limit = Number(args[args.indexOf('--limit') + 1]);
+        // Like hc's 8 MB cap, a read may stop before the requested last line.
+        const last = Math.min(offset + limit - 1, offset + 59, options.lines.length);
+        const text = options.lines.slice(offset - 1, last).join('\n') + '\n';
+        return stdout({ text, first: offset, last, lines: options.lines.length });
+      }
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+  return { invoke, reads };
+}
+
+test('hc_read returns the current branch of a peer transcript', async () => {
+  const { invoke, reads } = readPeer({
+    lines: sessionFile([
+      { type: 'message', id: 'a', parentId: null, message: { role: 'user', content: 'First' } },
+      {
+        type: 'message',
+        id: 'b',
+        parentId: 'a',
+        timestamp: 't-b',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Answer one' }] },
+      },
+      {
+        type: 'message',
+        id: 'c',
+        parentId: 'b',
+        message: { role: 'assistant', content: [{ type: 'toolCall', name: 'bash' }] },
+      },
+      { type: 'message', id: 'd', parentId: 'c', message: { role: 'toolResult', content: [] } },
+      { type: 'message', id: 'x', parentId: 'b', message: { role: 'user', content: 'Abandoned' } },
+      { type: 'message', id: 'e', parentId: 'd', message: { role: 'user', content: 'Second' } },
+      {
+        type: 'message',
+        id: 'f',
+        parentId: 'e',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'hidden' },
+            { type: 'text', text: 'y'.repeat(4_500) },
+          ],
+        },
+      },
+    ]),
+  });
+
+  const output = await invoke('hc_read', { target: 'm5/t3' });
+  expect(output.details).toEqual({
+    target: 'm5/t3',
+    state: 'live',
+    status: 'done',
+    source: 'transcript',
+    session_file: '/home/u/.pi/agent/sessions/--x--/s1.jsonl',
+    messages: [
+      { role: 'user', text: 'First' },
+      { role: 'assistant', text: 'Answer one', timestamp: 't-b' },
+      { role: 'user', text: 'Second' },
+      { role: 'assistant', text: 'y'.repeat(4_000), truncated: true },
+    ],
+  });
+  expect(reads[0]).toEqual([
+    'file',
+    '--json',
+    'read',
+    '--on',
+    'm5',
+    '--offset',
+    '1',
+    '--limit',
+    '1',
+    '--',
+    '/home/u/.pi/agent/sessions/--x--/s1.jsonl',
+  ]);
+});
+
+test('hc_read reads further back, in pieces, until it reaches enough messages', async () => {
+  const filler = Array.from({ length: 150 }, (_, index) => ({
+    type: 'custom',
+    id: `c${index}`,
+    parentId: index ? `c${index - 1}` : 'a',
+  }));
+  const { invoke, reads } = readPeer({
+    address: 't9',
+    lines: sessionFile([
+      { type: 'message', id: 'a', parentId: null, message: { role: 'user', content: 'First' } },
+      ...filler,
+      { type: 'message', id: 'z', parentId: 'c149', message: { role: 'user', content: 'Last' } },
+    ]),
+  });
+
+  expect((await invoke('hc_read', { target: 't9', limit: 2 })).details).toMatchObject({
+    messages: [
+      { role: 'user', text: 'First' },
+      { role: 'user', text: 'Last' },
+    ],
+  });
+  // The header, the last 100 lines in two pieces, then the remaining lines.
+  expect(reads.map((args) => args.slice(args.indexOf('--offset') + 1, -2))).toEqual([
+    ['1', '--limit', '1'],
+    ['54', '--limit', '100'],
+    ['114', '--limit', '40'],
+    ['2', '--limit', '52'],
+  ]);
+  expect(reads[0]).not.toContain('--on');
+});
+
+test('hc_read falls back to the screen in auto mode and reports why', async () => {
+  const noFile = readPeer({ lines: [], labels: {} });
+  expect((await noFile.invoke('hc_read', { target: 'm5/t3' })).details).toEqual({
+    target: 'm5/t3',
+    state: 'live',
+    status: 'done',
+    source: 'screen',
+    fallback_reason: 'm5/t3 does not report a session file.',
+    text: 'screen text',
+  });
+  await expect(noFile.invoke('hc_read', { target: 'm5/t3', source: 'transcript' })).rejects.toThrow(
+    'does not report a session file',
+  );
+
+  const spoofed = readPeer({
+    lines: [],
+    labels: { 'pi-herdr-agents.session': 's1', 'pi-herdr-agents.session-file': '/home/u/.ssh/id' },
+  });
+  await expect(
+    spoofed.invoke('hc_read', { target: 'm5/t3', source: 'transcript' }),
+  ).rejects.toThrow('not a Pi session file');
+  expect(spoofed.reads).toEqual([]);
+
+  const other = readPeer({ lines: [JSON.stringify({ type: 'session', id: 's0' })] });
+  await expect(other.invoke('hc_read', { target: 'm5/t3', source: 'transcript' })).rejects.toThrow(
+    'does not hold its session',
+  );
+
+  const blocked = readPeer({ lines: sessionFile([]), status: 'blocked' });
+  expect((await blocked.invoke('hc_read', { target: 'm5/t3' })).details).toMatchObject({
+    source: 'transcript',
+    status: 'blocked',
+    messages: [],
+    hint: 'It is blocked. Read source "screen" to see why.',
+  });
+  expect(
+    (await blocked.invoke('hc_read', { target: 'm5/t3', source: 'screen' })).details,
+  ).toMatchObject({ source: 'screen', text: 'screen text' });
 });

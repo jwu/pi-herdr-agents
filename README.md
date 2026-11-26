@@ -23,11 +23,17 @@ For a local checkout, run `pi -e .` from the repository directory inside an hc t
 
 For example, ask the parent agent to delegate code review and testing to two subagents. They can find each other with `hc_agents`, exchange findings with `hc_send`, and report back to the parent when they finish or get blocked. You can open any terminal with `hc attach <address>`.
 
-By default, child agents exit when the program in their parent terminal exits. The tools operate within a single Herdr Core instance.
+By default, child agents exit when the program in their parent terminal exits. Parents, children, and siblings live on one machine. Peers can be on any machine that Herdr Core connects to.
+
+## Peers
+
+Every Pi that runs this extension labels its terminal at each session start: `pi-herdr-agents.peer=1` marks it, and `pi-herdr-agents.session` and `pi-herdr-agents.session-file` name its Pi session. A *peer* is another root terminal, one without an hc parent, that carries the peer label. It can be on this machine or a connected one, such as `macbook/t7`. Only a root terminal has peers, so a child cannot reach its own ancestors this way.
+
+Peers can message each other with `hc_send` and read each other with `hc_read`. They cannot stop, renew, or remove each other. Each machine must run this version of the extension, and a peer can reply only if its machine has added the sender's machine. A message to a remote peer names the sender by its Herdr Core ID, such as `<core-id>/t2`, which the receiving hc resolves to its own name for that machine.
 
 ## Tools
 
-A *managed direct child* is a terminal this agent started with `hc_subagent`. Tools that take a `target` expect its address, as returned by `hc_subagent` or `hc_agents`.
+A *managed direct child* is a terminal this agent started with `hc_subagent`. Tools that take a `target` expect its address, as returned by `hc_subagent` or `hc_agents`. As in hc, `state` is `live` or `finished`, and `status` is what Pi reports: `idle`, `working`, `done`, `blocked`, or `error`.
 
 ### `hc_subagent`
 
@@ -63,24 +69,24 @@ Give a finished child a new task in a fresh Pi session. The extension types `/ne
 | `target` | Required. A managed direct child whose status is `idle` or `done`. Interrupt a working child with `hc_stop` first. |
 | `task` | Required. The task for the new session. |
 
-A child publishes its Pi session ID in the `pi-herdr-agents.session` label at each session start, which lets `hc_renew` confirm that `/new` took effect. If the child’s editor holds a draft, the typed `/new` joins it and no new session starts; `hc_renew` then reports `first_message.sent: false`. To change the agent or model, close the child with `hc_rm` and start another.
+The `pi-herdr-agents.session` label, updated at each session start, lets `hc_renew` confirm that `/new` took effect. If the child’s editor holds a draft, the typed `/new` joins it and no new session starts; `hc_renew` then reports `first_message.sent: false`. To change the agent or model, close the child with `hc_rm` and start another.
 
 ### `hc_send`
 
-Send a message to the parent, a direct child, or a sibling. An idle recipient starts a turn with it. A working recipient handles it by sender: a message from its parent steers the current run, arriving after the running tool calls finish. Messages from children and siblings are queued as follow-ups, which arrive once the run has no more tool calls, so reports do not interrupt the work in progress.
+Send a message to the parent, a direct child, a sibling, or a peer. An idle recipient starts a turn with it. A working recipient handles it by sender: a message from its parent steers the current run, arriving after the running tool calls finish. Messages from children, siblings, and peers are queued as follow-ups, which arrive once the run has no more tool calls, so reports do not interrupt the work in progress.
 
 | Parameter | Description |
 | --- | --- |
 | `message` | Required. The message text. |
-| `target` | Optional address of a direct child or sibling. Omit it to send to the parent. |
+| `target` | Optional address of a direct child, sibling, or peer. A remote peer may be given as `machine/t7` or as the `core-id/t7` from a message's `<hc from="...">` tag. Omit it to send to the parent. |
 
 ### `hc_agents`
 
-List the hc addresses and statuses of this agent, its parent, its direct children, and its siblings.
+List the hc addresses and statuses of this agent, its parent, its direct children, its siblings, and, for a root terminal, its peers.
 
 | Parameter | Description |
 | --- | --- |
-| `include_finished` | Optional. Set `true` to include finished children and siblings. |
+| `include_finished` | Optional. Set `true` to include finished children, siblings, and peers. |
 
 ### `hc_ls`
 
@@ -92,12 +98,19 @@ List terminals visible to Herdr Core, including those on connected machines. Ret
 
 ### `hc_read`
 
-Read a managed direct child’s terminal output.
+Read a managed direct child or a peer: its recent conversation or its screen.
 
 | Parameter | Description |
 | --- | --- |
-| `target` | Required. A managed direct child. |
-| `lines` | Optional history lines, 0–200. Defaults to 40. |
+| `target` | Required. A managed direct child or a peer. |
+| `source` | Optional. `auto` (default) reads the transcript and falls back to the screen. `transcript` reads only the transcript and fails if it cannot. `screen` reads the visible screen. |
+| `limit` | Optional number of transcript messages, 1–50. Defaults to 10. |
+
+The transcript holds the last user and assistant text messages on the current branch of the target's Pi session, without thinking or tool output. Messages longer than 4,000 characters are cut and marked `truncated`. `hc_read` reads the file named by the `pi-herdr-agents.session-file` label through `hc file read`, so a remote peer works the same way. It accepts only a `.jsonl` file whose header holds the session in the `pi-herdr-agents.session` label.
+
+The screen shows what the transcript does not: approval dialogs, an unsent draft, and a reply in progress. Pi draws a full-screen interface, so the screen holds no scrollback. A history read would only scroll Pi's view, so `hc_read` never requests one.
+
+Every result has `target`, `state`, `status`, and `source`, which names what was read. A transcript result adds `session_file` and `messages`, and a `hint` when the target is `blocked` or in `error`. A screen result adds `text`, and `fallback_reason` when `auto` could not read the transcript.
 
 ### `hc_stop`
 
@@ -166,5 +179,6 @@ bun test
 
 - `extensions/index.ts` is the sole Pi extension entry point.
 - `extensions/hc-tools.ts` registers the tools, and `extensions/hc-client.ts` runs hc commands and resolves terminal relationships.
-- `extensions/hc-inbox.ts` turns incoming messages from children and siblings into follow-ups while Pi works.
+- `extensions/hc-transcript.ts` reads a Pi session file through hc for `hc_read`.
+- `extensions/hc-inbox.ts` turns incoming messages from children, siblings, and peers into follow-ups while Pi works.
 - `tests/` covers Pi package loading and tool behavior.

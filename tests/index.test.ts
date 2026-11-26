@@ -75,3 +75,43 @@ test('maxDepth from pi --agent limits hc_subagent', async () => {
   listeners.get('pi-subagents:configure')!({ maxDepth: 1 });
   await expect(invoke()).rejects.toThrow('Unknown HC agent: hc-test-missing');
 });
+
+test('every Pi, a root included, publishes its peer label and session on session start', async () => {
+  process.env.HC_TERMINAL_ID = 't2';
+  delete process.env.PI_SUBAGENT_DEPTH;
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<void>>();
+  const calls: string[][] = [];
+  extension({
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      return { stdout: '{}', stderr: '', code: 0, killed: false };
+    },
+    events: { on: () => undefined },
+    getFlag: () => undefined,
+    on: (name: string, fn: (event: unknown, ctx: unknown) => Promise<void>) => {
+      if (name === 'session_start') handlers.set(name, fn);
+    },
+    registerFlag: () => undefined,
+    registerTool: () => undefined,
+  } as unknown as ExtensionAPI);
+
+  const start = (file: string | undefined) =>
+    handlers.get('session_start')!(
+      {},
+      { sessionManager: { getSessionId: () => 's1', getSessionFile: () => file } },
+    );
+  await start('/sessions/s1.jsonl');
+  // An ephemeral session removes the file label.
+  await start(undefined);
+  expect(calls).toEqual(
+    ['/sessions/s1.jsonl', ''].map((file) => [
+      'label',
+      '--json',
+      '--',
+      't2',
+      'pi-herdr-agents.peer=1',
+      'pi-herdr-agents.session=s1',
+      `pi-herdr-agents.session-file=${file}`,
+    ]),
+  );
+});

@@ -7,9 +7,9 @@ import {
   type DelegationScope,
 } from '@johnnywu/pi-agent-profiles';
 import { fileURLToPath } from 'node:url';
-import { agentFlag, type AgentScope } from './agent-profiles.ts';
+import { type AgentScope } from './agent-profiles.ts';
 import { registerAgentProfile } from './agent-prompt.ts';
-import { sessionLabelKey } from './hc-client.ts';
+import { peerLabel, sessionFileLabelKey, sessionLabelKey } from './hc-client.ts';
 import { registerHcInbox } from './hc-inbox.ts';
 import { registerHcTools } from './hc-tools.ts';
 
@@ -41,12 +41,20 @@ export default function (pi: ExtensionAPI): void {
   registerHcTools(pi, address, fileURLToPath(new URL('./index.ts', import.meta.url)), getScope);
   registerHcInbox(pi, address);
 
-  // A child publishes its session ID so hc_renew can confirm that /new took effect.
+  // Every Pi publishes its session so hc_renew can confirm that /new took effect and hc_read can
+  // find the transcript. The peer label lets other root Pi sessions discover this one.
   pi.on('session_start', async (_event, ctx) => {
-    if (typeof pi.getFlag(agentFlag) !== 'string') return;
     await pi.exec(
       'hc',
-      ['label', '--json', '--', address, `${sessionLabelKey}=${ctx.sessionManager.getSessionId()}`],
+      [
+        'label',
+        '--json',
+        '--',
+        address,
+        peerLabel,
+        `${sessionLabelKey}=${ctx.sessionManager.getSessionId()}`,
+        `${sessionFileLabelKey}=${ctx.sessionManager.getSessionFile() ?? ''}`,
+      ],
       { timeout: 5_000 },
     );
   });
