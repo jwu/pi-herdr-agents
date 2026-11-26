@@ -31,6 +31,10 @@ Every Pi that runs this extension labels its terminal at each session start: `pi
 
 Peers can message each other with `hc_send` and read each other with `hc_read`. They cannot stop, renew, or remove each other. Each machine must run this version of the extension, and a peer can reply only if its machine has added the sender's machine. A message to a remote peer names the sender by its Herdr Core ID, such as `<core-id>/t2`, which the receiving hc resolves to its own name for that machine.
 
+### Child sessions
+
+Children store their Pi sessions in an `hc-children` subdirectory, so they stay out of the parent workspace's `/resume` list. With Pi's default storage, each child uses the directory of its own workspace, such as `~/.pi/agent/sessions/--home-alex-project--/hc-children`. If the parent uses a custom session directory, its children share `hc-children` inside it. A parent that does not save sessions leaves its children's storage unchanged. Renewed children keep their directory, and `hc_read` still finds their transcripts.
+
 ## Tools
 
 A *managed direct child* is a terminal this agent started with `hc_subagent`. Tools that take a `target` expect its address, as returned by `hc_subagent` or `hc_agents`. As in hc, `state` is `live` or `finished`, and `status` is what Pi reports: `idle`, `working`, `done`, `blocked`, or `error`.

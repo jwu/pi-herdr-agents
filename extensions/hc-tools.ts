@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { isAbsolute, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { Type } from 'typebox';
 import {
   loadAgentDefinitions,
@@ -34,6 +34,7 @@ const taskParam = Type.String({
 const includeFinishedParam = Type.Optional(
   Type.Boolean({ description: 'Include finished terminals. Defaults to false.' }),
 );
+const childSessionsDir = 'hc-children';
 const reservedLabel = agentLabel.split('=')[0];
 const placementLabels = ['herdr.space', 'herdr.tab'];
 type Tab = 'hidden' | 'new' | 'shared' | 'self';
@@ -90,6 +91,22 @@ async function related(hc: HcClient, family: Family, address?: string) {
     throw new Error(`${address} is not your parent, child, sibling, or peer. Use hc_agents.`);
   }
   return terminal;
+}
+
+// Pi names a workspace's default session directory after its cwd.
+function sessionSlug(cwd: string) {
+  return `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+}
+
+// Pi lists a workspace's sessions from the top level of its session directory, so children store
+// theirs one level down and stay out of /resume. A parent in Pi's default layout places a child
+// under the child's own workspace; a parent with a custom session directory keeps children in it.
+// Returns undefined when the parent does not persist sessions.
+export function childSessionDir(parentDir: string, parentCwd: string, childCwd: string) {
+  if (!parentDir) return undefined;
+  const dir = basename(parentDir) === childSessionsDir ? dirname(parentDir) : parentDir;
+  if (basename(dir) !== sessionSlug(parentCwd)) return join(dir, childSessionsDir);
+  return join(dirname(dir), sessionSlug(childCwd), childSessionsDir);
 }
 
 export function registerHcTools(
@@ -339,6 +356,9 @@ export function registerHcTools(
         return ['--label', `${key}=${value}`];
       });
       const command = await piCommand(agent, model, signal, ctx);
+      const childCwd = resolve(ctx.cwd, cwd ?? '.');
+      const sessionDir = childSessionDir(ctx.sessionManager.getSessionDir(), ctx.cwd, childCwd);
+      if (sessionDir) command.push('--session-dir', sessionDir);
       const hc = client(signal);
       const placement = await tabLabels(hc, tab);
 
@@ -353,7 +373,7 @@ export function registerHcTools(
         '--name',
         name,
         '--cwd',
-        resolve(ctx.cwd, cwd ?? '.'),
+        childCwd,
         '--label',
         agentLabel,
         ...placement,

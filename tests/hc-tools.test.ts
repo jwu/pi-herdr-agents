@@ -7,9 +7,9 @@ import type {
 import { parseAgentProfile } from '@johnnywu/pi-agent-profiles';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { childPiArgs } from '../extensions/agent-profiles.ts';
-import { registerHcTools } from '../extensions/hc-tools.ts';
+import { childSessionDir, registerHcTools } from '../extensions/hc-tools.ts';
 
 const workspace = process.cwd();
 const executable = process.execPath;
@@ -23,8 +23,10 @@ const sibling = { ...self, address: 't3', agent: 'pi', status: 'done' };
 const unrelated = { ...sibling, address: 't4', parent: 't8' };
 const child = { ...self, address: 't5', parent: self.address };
 const delegationTools = 'hc_subagent,hc_renew,hc_read,hc_stop,hc_rm';
+const childSessionSlug = (cwd: string) =>
+  `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
 
-function register(exec: ExtensionAPI['exec'], cwd = workspace) {
+function register(exec: ExtensionAPI['exec'], cwd = workspace, sessionDir = '') {
   const tools = new Map<string, ToolDefinition>();
   registerHcTools(
     {
@@ -37,7 +39,10 @@ function register(exec: ExtensionAPI['exec'], cwd = workspace) {
     '/package/extensions/index.ts',
   );
   return (name: string, params: Record<string, unknown>) =>
-    tools.get(name)!.execute('test', params, undefined, undefined, { cwd } as ExtensionToolContext);
+    tools.get(name)!.execute('test', params, undefined, undefined, {
+      cwd,
+      sessionManager: { getSessionDir: () => sessionDir },
+    } as unknown as ExtensionToolContext);
 }
 
 const env =
@@ -137,6 +142,59 @@ test('hc_subagent launches an interactive child and waits for idle before sendin
     terminal: { address: 't5' },
     first_message: { sent: true, started: true },
   });
+});
+
+test.each([
+  ['the default layout', '/sessions/--lead--', join('/sessions/--lead-child--/hc-children')],
+  [
+    'a child in the default layout',
+    '/sessions/--lead--/hc-children',
+    join('/sessions/--lead-child--/hc-children'),
+  ],
+  ['a custom directory', '/custom', join('/custom/hc-children')],
+  ['a child in a custom directory', '/custom/hc-children', join('/custom/hc-children')],
+])('childSessionDir keeps children out of /resume from %s', (_case, parentDir, expected) => {
+  expect(childSessionDir(parentDir, '/lead', '/lead/child')).toBe(expected);
+});
+
+test('childSessionDir leaves the session directory alone when the parent does not persist sessions', () => {
+  expect(childSessionDir('', '/lead', '/lead/child')).toBeUndefined();
+});
+
+test('hc_subagent passes the child session directory to the child', async () => {
+  const leadCwd = resolve('/lead');
+  const parentDir = join(resolve('/sessions'), childSessionSlug(leadCwd));
+  const runs: string[][] = [];
+  const invoke = register(
+    async (command, args) => {
+      if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+      if (args[0] === 'run') {
+        runs.push(args);
+        return stdout(child);
+      }
+      if (args[0] === 'wait') return stdout({});
+      if (args[0] === 'get') return stdout({ ...child, status: { app: 'pi', state: 'idle' } });
+      if (args[0] === 'send') return stdout({ started: true });
+      throw new Error(`Unexpected ${args[0]}`);
+    },
+    leadCwd,
+    parentDir,
+  );
+
+  await invoke('hc_subagent', { name: 'review', task: 'Review this', cwd: 'child workspace' });
+  const args = runs[0]!;
+  expect(args.slice(args.indexOf('--') + 1)).toEqual([
+    ...env,
+    executable,
+    '-e',
+    '/package/extensions/index.ts',
+    '--hc-agent-profile',
+    JSON.stringify({ depth: 1 }),
+    '--exclude-tools',
+    delegationTools,
+    '--session-dir',
+    join(resolve('/sessions'), childSessionSlug(join(leadCwd, 'child workspace')), 'hc-children'),
+  ]);
 });
 
 test('hc_subagent resolves an agent in the parent workspace and enables the HC reporting tools', async () => {
