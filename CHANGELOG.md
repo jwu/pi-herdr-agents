@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix shared tab placement for concurrent child launches.
+
 ## 0.7.0
 
 - Store child sessions in an `hc-children` subdirectory so they stay out of `/resume`.
