@@ -44,7 +44,7 @@ export function summarizeTerminal(terminal: Terminal): ListedTerminal {
   };
 }
 
-class HcError extends Error {
+export class HcError extends Error {
   constructor(
     readonly code: number,
     message: string,

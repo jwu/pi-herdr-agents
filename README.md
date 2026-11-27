@@ -35,6 +35,10 @@ Peers can message each other with `hc_send` and read each other with `hc_read`. 
 
 Children store their Pi sessions in an `hc-children` subdirectory, so they stay out of the parent workspace's `/resume` list. With Pi's default storage, each child uses the directory of its own workspace, such as `~/.pi/agent/sessions/--home-alex-project--/hc-children`. If the parent uses a custom session directory, its children share `hc-children` inside it. A parent that does not save sessions leaves its children's storage unchanged. Renewed children keep their directory, and `hc_read` still finds their transcripts.
 
+## Automatic notices
+
+A child whose model fails cannot report with `hc_send`, and parents do not poll. The extension in each child therefore messages its parent on its own when a run ends in an error after Pi's own retries (with the error text, such as a content filter refusal), and when Pi opens a dialog and waits on it. A root, or a child whose parent is on another machine, sends no notices.
+
 ## Tools
 
 A *managed direct child* is a terminal this agent started with `hc_subagent`. Tools that take a `target` expect its address, as returned by `hc_subagent` or `hc_agents`. As in hc, `state` is `live` or `finished`, and `status` is what Pi reports: `idle`, `working`, `done`, `blocked`, or `error`.
@@ -62,7 +66,7 @@ Start an interactive Pi child in a new hc terminal and deliver its first task on
 
 Every value except `hidden` requires the parent terminal to be in a Herdr space. The extension sets the `herdr.space` and `herdr.tab` labels for these placements.
 
-The result holds the child’s `terminal` and a `first_message` delivery status. A successful send means hc delivered the message, and `started` tells whether hc observed a new turn. If `first_message.sent` is `false` or `null`, or `started` is `false`, inspect the terminal at the returned address and respond to any approval prompt shown at startup. If the tool is canceled during delivery, use `hc_agents` to find the launched terminal by name.
+The result holds the child’s `terminal` and a `first_message` delivery status. A successful send means hc delivered the message, and `started` tells whether hc observed a new turn. If Pi is still starting, the extension waits up to 90 seconds for it to become idle, and retries when hc reports that the status changed before it typed anything, so the task is never sent twice; `first_message.attempts` counts the tries. It gives up at once when the child is `blocked`, in `error`, or exits. If `first_message.sent` is `false` or `null`, or `started` is `false`, inspect the terminal at the returned address and respond to any approval prompt shown at startup. If the tool is canceled during delivery, use `hc_agents` to find the launched terminal by name.
 
 ### `hc_renew`
 
@@ -78,6 +82,8 @@ The `pi-herdr-agents.session` label, updated at each session start, lets `hc_ren
 ### `hc_send`
 
 Send a message to the parent, a direct child, a sibling, or a peer. An idle recipient starts a turn with it. A working recipient handles it by sender: a message from its parent steers the current run, arriving after the running tool calls finish. Messages from children, siblings, and peers are queued as follow-ups, which arrive once the run has no more tool calls, so reports do not interrupt the work in progress.
+
+When a message to a sibling cannot be delivered, for example because the sibling is in `error`, the tool fails and the extension also tells the parent, so the sender is not the only one who knows.
 
 | Parameter | Description |
 | --- | --- |
@@ -185,4 +191,5 @@ bun test
 - `extensions/hc-tools.ts` registers the tools, and `extensions/hc-client.ts` runs hc commands and resolves terminal relationships.
 - `extensions/hc-transcript.ts` reads a Pi session file through hc for `hc_read`.
 - `extensions/hc-inbox.ts` turns incoming messages from children, siblings, and peers into follow-ups while Pi works.
+- `extensions/hc-health.ts` sends a child's automatic error and dialog notices to its parent.
 - `tests/` covers Pi package loading and tool behavior.

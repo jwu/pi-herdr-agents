@@ -928,3 +928,84 @@ test('hc_read falls back to the screen in auto mode and reports why', async () =
     (await blocked.invoke('hc_read', { target: 'm5/t3', source: 'screen' })).details,
   ).toMatchObject({ source: 'screen', text: 'screen text' });
 });
+
+test('hc_subagent keeps waiting for a slow Pi and retries after a status change', async () => {
+  const states = ['working', 'idle', 'idle'];
+  const sends: string[][] = [];
+  const invoke = register(async (command, args) => {
+    if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+    switch (args[0]) {
+      case 'run':
+        return stdout(child);
+      case 'wait':
+        return stdout({ reason: 'status' });
+      case 'get':
+        return stdout({ ...child, status: { app: 'pi', state: states.shift() ?? 'idle' } });
+      case 'send':
+        sends.push(args);
+        // The first send finds Pi busy again, so hc types nothing.
+        if (sends.length === 1) {
+          return { ...stdout(null), code: 10, stderr: '{"error":{"kind":"status_mismatch"}}' };
+        }
+        return stdout({ started: true, turn: 0 });
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+  expect(
+    (await invoke('hc_subagent', { name: 'review', task: 'Review the change' })).details,
+  ).toMatchObject({ first_message: { sent: true, started: true, attempts: 3 } });
+  expect(sends).toHaveLength(2);
+});
+
+test('hc_subagent stops waiting when the child reports an error', async () => {
+  let gets = 0;
+  const invoke = register(async (command, args) => {
+    if (command !== 'hc') return { ...stdout(null), stdout: executable + '\n' };
+    switch (args[0]) {
+      case 'run':
+        return stdout(child);
+      case 'wait':
+        return stdout({ reason: 'status', status: 'error' });
+      case 'get':
+        gets++;
+        return stdout({ ...child, status: { app: 'pi', state: 'error' } });
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+  expect(
+    (await invoke('hc_subagent', { name: 'review', task: 'Review the change' })).details,
+  ).toMatchObject({ first_message: { sent: false, reason: expect.stringContaining('error') } });
+  expect(gets).toBe(1);
+});
+
+test('hc_send tells the parent when a sibling cannot take a message', async () => {
+  const sends: string[][] = [];
+  const invoke = register(async (_command, args) => {
+    switch (args[0]) {
+      case 'get':
+        if (args.at(-1) === parent.address) return stdout(parent);
+        if (args.at(-1) === sibling.address) {
+          return stdout({ ...sibling, name: 'reviewer', status: { app: 'pi', state: 'error' } });
+        }
+        return stdout({ ...self, name: 'coder' });
+      case 'ls':
+        return stdout({ terminals: [self, { ...sibling, name: 'reviewer' }] });
+      case 'send':
+        sends.push(args);
+        return stdout({ started: true, turn: 1 });
+      default:
+        throw new Error(`Unexpected ${args[0]}`);
+    }
+  });
+  await expect(invoke('hc_send', { target: 't3', message: 'Please review' })).rejects.toThrow(
+    't3 is error and is not ready for Pi input. Check its terminal before retrying. Your parent has been told.',
+  );
+  expect(sends).toHaveLength(1);
+  expect(sends[0]!.slice(0, 6)).toEqual(['send', '--json', '--if', 'working', '--', 't1']);
+  expect(sends[0]!.at(-1)).toStartWith('HC agent message from t2:\n\n');
+  expect(sends[0]!.at(-1)).toContain(
+    't2 (coder) could not deliver a message to its sibling t3 (reviewer): t3 is error',
+  );
+});

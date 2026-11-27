@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { type AgentScope } from './agent-profiles.ts';
 import { registerAgentProfile } from './agent-prompt.ts';
 import { peerLabel, sessionFileLabelKey, sessionLabelKey } from './hc-client.ts';
+import { registerHcHealth } from './hc-health.ts';
 import { registerHcInbox } from './hc-inbox.ts';
 import { registerHcTools } from './hc-tools.ts';
 
@@ -40,6 +41,7 @@ export default function (pi: ExtensionAPI): void {
 
   registerHcTools(pi, address, fileURLToPath(new URL('./index.ts', import.meta.url)), getScope);
   registerHcInbox(pi, address);
+  registerHcHealth(pi, address);
 
   // Every Pi publishes its session so hc_renew can confirm that /new took effect and hc_read can
   // find the transcript. The peer label lets other root Pi sessions discover this one.

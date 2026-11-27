@@ -12,6 +12,7 @@ import { messagePrefix } from './hc-inbox.ts';
 import {
   agentLabel,
   HcClient,
+  HcError,
   sessionLabelKey,
   summarizeTerminal,
   type Terminal,
@@ -38,6 +39,8 @@ const includeFinishedParam = Type.Optional(
 const childSessionsDir = 'hc-children';
 const reservedLabel = agentLabel.split('=')[0];
 const placementLabels = ['herdr.space', 'herdr.tab'];
+const startAttempts = 3;
+const startWaitSeconds = 30;
 type Tab = 'hidden' | 'new' | 'shared' | 'self';
 
 function result<T>(data: T) {
@@ -73,6 +76,22 @@ async function find<T extends { address: string }>(
     return match((await hc.get(target)).address) ?? undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** Best-effort notice to the parent. Returns whether hc accepted it. */
+async function notifyParent(hc: HcClient, family: Family, news: string) {
+  if (!family.parent) return false;
+  const { address, name } = family.self;
+  const label = name ? `${address} (${name})` : address;
+  try {
+    await hc.send(
+      await hc.get(family.parent.address),
+      `${messagePrefix} ${address}:\n\n[Automatic notice from the pi-herdr-agents extension] ${label} ${news}`,
+    );
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -210,33 +229,52 @@ export function registerHcTools(
       'When you finish or get blocked, report to your parent with hc_send: the outcome, what changed, and how you verified it. Use hc_agents to find siblings if you need to coordinate.',
     ].join('\n\n');
 
-    let current: Terminal;
-    try {
-      await hc.command('wait', ['--timeout', '30', '--', child], 40_000);
-      current = await hc.get(child);
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      return { terminal: undefined, first_message: { sent: false, reason: String(error) } };
-    }
+    // Pi can take longer than one wait to start. Until hc types the task, nothing has reached the
+    // child, so waiting again cannot deliver it twice.
+    let terminal: ReturnType<typeof summarizeTerminal> | undefined;
+    for (let attempt = 1; attempt <= startAttempts; attempt++) {
+      let current: Terminal;
+      try {
+        await hc.command('wait', ['--timeout', String(startWaitSeconds), '--', child], 40_000);
+        current = await hc.get(child);
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return { terminal, first_message: { sent: false, reason: String(error) } };
+      }
 
-    const terminal = summarizeTerminal(current);
-    if (current.status?.state !== 'idle' || current.status.app !== 'pi') {
-      return {
-        terminal,
-        first_message: {
-          sent: false,
-          reason:
-            'Pi did not reach idle. Inspect the existing terminal with hc_read before sending the task.',
-        },
-      };
+      terminal = summarizeTerminal(current);
+      const state = current.status?.state;
+      if (current.state !== 'live' || ['blocked', 'error', 'done'].includes(state ?? '')) {
+        return {
+          terminal,
+          first_message: {
+            sent: false,
+            reason: `Pi is ${state ?? current.state} instead of idle. Inspect the terminal with hc_read before sending the task.`,
+          },
+        };
+      }
+      if (state !== 'idle' || current.status?.app !== 'pi') {
+        // hc wait may return at once while Pi has not reported a status yet.
+        await new Promise((done) => setTimeout(done, 1_000));
+        continue;
+      }
+      try {
+        const delivery = await hc.send(current, task, { strictStatus: true });
+        return { terminal, first_message: { sent: true, attempts: attempt, ...delivery } };
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        // The status changed before hc typed anything, so the task can wait for the next idle.
+        if (error instanceof HcError && error.code === 10) continue;
+        return { terminal, first_message: { sent: null, reason: String(error) } };
+      }
     }
-    try {
-      const delivery = await hc.send(current, task, { strictStatus: true });
-      return { terminal, first_message: { sent: true, ...delivery } };
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      return { terminal, first_message: { sent: null, reason: String(error) } };
-    }
+    return {
+      terminal,
+      first_message: {
+        sent: false,
+        reason: `Pi did not reach idle in ${startAttempts * startWaitSeconds} seconds. Inspect the terminal with hc_read before sending the task.`,
+      },
+    };
   }
 
   async function directChild(hc: HcClient, target: string) {
@@ -476,11 +514,26 @@ export function registerHcTools(
     async execute(_id, { target, message }, signal) {
       const body = text(message);
       const hc = client(signal);
-      const recipient = await related(hc, await hc.family(address), target);
+      const family = await hc.family(address);
+      const recipient = await related(hc, family, target);
       const current = await hc.get(recipient.address);
       const sender = recipient.address.includes('/') ? await globalAddress(hc) : address;
-      const delivery = await hc.send(current, `${messagePrefix} ${sender}:\n\n${body}`);
-      return result({ target: recipient.address, ...delivery });
+      try {
+        const delivery = await hc.send(current, `${messagePrefix} ${sender}:\n\n${body}`);
+        return result({ target: recipient.address, ...delivery });
+      } catch (error) {
+        const isSibling = family.siblings.some((sibling) => sibling.address === recipient.address);
+        if (signal?.aborted || !isSibling) throw error;
+        // A sender may only retry, so the parent hears that a sibling cannot take messages.
+        const notified = await notifyParent(
+          hc,
+          family,
+          `could not deliver a message to its sibling ${recipient.address}${recipient.name ? ` (${recipient.name})` : ''}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}${notified ? ' Your parent has been told.' : ''}`,
+        );
+      }
     },
   });
 

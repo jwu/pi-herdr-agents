@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- A child now tells its parent on its own when a run ends in an error after Pi's retries, with the error text, and when Pi waits on a dialog.
+- `hc_send` tells the parent when a message to a sibling cannot be delivered.
+- `hc_subagent` and `hc_renew` wait up to 90 seconds for a slow Pi to become idle and retry the first task after a status mismatch, without sending it twice. `first_message.attempts` counts the tries.
+
 ## 0.7.1
 
 - Fix shared tab placement for concurrent child launches.
