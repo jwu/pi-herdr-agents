@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
 
 - A child now tells its parent on its own when a run ends in an error after Pi's retries, with the error text, and when Pi waits on a dialog.
 - `hc_send` tells the parent when a message to a sibling cannot be delivered.
