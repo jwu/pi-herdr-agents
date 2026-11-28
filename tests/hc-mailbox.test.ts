@@ -1,6 +1,6 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HcClient } from '../extensions/hc-client.ts';
@@ -28,8 +28,11 @@ function load(root: string) {
   };
   const handlers = new Map<string, (event: unknown, context: unknown) => unknown>();
   const submissions: unknown[][] = [];
+  const notifications: string[] = [];
+  const labels: string[] = [];
   const exec: ExtensionAPI['exec'] = async (_command, args) => {
     if (args[0] === 'send') throw new Error('The blocked Pi must never receive terminal input');
+    if (args[0] === 'label') labels.push(args.at(-1)!);
     return { stdout: JSON.stringify(parent), stderr: '', code: 0, killed: false, truncated: false };
   };
   registerHcMailbox(
@@ -46,13 +49,21 @@ function load(root: string) {
   const hc = new HcClient(exec);
   return {
     submissions,
+    notifications,
+    labels,
     dir: join(root, 't1-123'),
     setStatus: (state: string) => {
       parent.status.state = state;
     },
     queue: (report: string) =>
       sendToParent(hc, { ...parent, status: { app: 'pi', state: 'blocked' } }, report, root),
-    emit: (name: string, event: unknown = {}) => handlers.get(name)?.(event, { hasUI: true }),
+    emit: (name: string, event: unknown = {}) =>
+      handlers.get(name)?.(event, {
+        hasUI: true,
+        isIdle: () => true,
+        hasPendingMessages: () => false,
+        ui: { notify: (message: string) => notifications.push(message) },
+      }),
   };
 }
 
@@ -107,14 +118,68 @@ test('a report written after the prompt closes still wakes the parent', async ()
 });
 
 test('an unreceived report survives /new and waits for a native dialog to clear', async () => {
-  await withMailbox(async ({ emit, setStatus, queue, submissions }) => {
+  await withMailbox(async ({ emit, setStatus, queue, submissions, labels }) => {
     await queue('Report across sessions');
     await emit('session_shutdown', { reason: 'new' });
+    expect(labels).toEqual([`${inboxLabelKey}=1`]);
     await emit('session_start', { reason: 'new' });
     await Bun.sleep(40);
     expect(submissions).toEqual([]);
     setStatus('idle');
     await until(() => submissions.length === 1, 3_000);
     expect(submissions).toEqual([['Report across sessions', { deliverAs: 'followUp' }]]);
+  });
+});
+
+test('an unconfirmed batch retries once and leaves later reports free to deliver', async () => {
+  const clock = spyOn(Date, 'now');
+  let time = Date.now();
+  clock.mockImplementation(() => time);
+  try {
+    await withMailbox(async ({ emit, setStatus, queue, dir, submissions, notifications }) => {
+      await queue('Unconfirmed report');
+      setStatus('idle');
+      await emit('agent_settled');
+      await until(() => submissions.length === 1);
+      await queue('Later report');
+
+      time += 31_000;
+      await emit('agent_settled');
+      await until(() => submissions.length === 2);
+      expect(submissions.map(([text]) => text)).toEqual([
+        'Unconfirmed report',
+        'Unconfirmed report',
+      ]);
+
+      time += 31_000;
+      await emit('agent_settled');
+      await until(() => submissions.length === 3);
+      expect(submissions[2]?.[0]).toBe('Later report');
+      expect(notifications).toEqual([expect.stringContaining('not confirmed after retrying')]);
+      await emit('message_end', { message: { role: 'user', content: 'Later report' } });
+      await until(async () => (await readdir(dir)).length === 1);
+      const [file] = await readdir(dir);
+      expect(file).toEndWith('.unconfirmed');
+      expect(await readFile(join(dir, file!), 'utf8')).toBe('Unconfirmed report');
+    });
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test('a persistent scan failure warns once and quitting clears the inbox label', async () => {
+  await withMailbox(async ({ emit, dir, queue, notifications, labels }) => {
+    const moved = `${dir}-moved`;
+    await queue('Unreceived report');
+    await rename(dir, moved);
+    await emit('agent_settled');
+    await until(() => notifications.length === 1);
+    await emit('agent_settled');
+    await Bun.sleep(30);
+    expect(notifications).toEqual([expect.stringContaining('Could not process the HC inbox')]);
+    await rename(moved, dir);
+    await emit('session_shutdown', { reason: 'quit' });
+    expect(labels).toEqual([`${inboxLabelKey}=1`, `${inboxLabelKey}=`]);
+    await expect(stat(dir)).rejects.toHaveProperty('code', 'ENOENT');
   });
 });

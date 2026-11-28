@@ -83,7 +83,7 @@ The `pi-herdr-agents.session` label, updated at each session start, lets `hc_ren
 
 Send a message to the parent, a direct child, a sibling, or a peer. An idle recipient starts a turn with it. A working recipient handles it by sender: a message from its parent steers the current run, arriving after the running tool calls finish. Messages from children, siblings, and peers are queued as follow-ups, which arrive once the run has no more tool calls, so reports do not interrupt the work in progress.
 
-A blocked local parent running this version accepts child reports into its on-disk inbox. `hc_send` returns `{"queued": true, "sent": false}` after saving the report. The parent delivers queued reports in a batch when Pi can take input again. They follow the terminal across `/new`. Queued reports need no retry.
+A blocked local parent running this version accepts child reports into its on-disk inbox. `hc_send` returns `{"queued": true, "sent": false}` after saving the report. The parent delivers queued reports in a batch when Pi can take input again. Reports follow the terminal across `/new`, and the sender can finish without retrying. If Pi fails to confirm a batch, the inbox retries it once, then sets the reports aside as `.unconfirmed` files and displays a warning. Quitting Pi normally clears the inbox, including any reports still on disk.
 
 When a message to a sibling cannot be delivered, for example because the sibling is in `error`, the tool fails and the extension also tells the parent.
 

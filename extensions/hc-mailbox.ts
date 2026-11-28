@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { randomUUID } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { canReceive, HcClient, HcError, type Terminal } from './hc-client.ts';
@@ -90,8 +90,10 @@ export function registerHcMailbox(
     let closed = false;
     let running: Promise<void> | undefined;
     let scanAgain = false;
+    let reportedScanError = false;
     let pending:
-      { text: string; files: string[]; submitted: number; accepted: boolean } | undefined;
+      | { text: string; files: string[]; submitted: number; accepted: boolean; retried: boolean }
+      | undefined;
     const unavailable = () => closed || prompts > 0;
     const waitingForReceipt = () =>
       pending &&
@@ -106,12 +108,20 @@ export function registerHcMailbox(
         pending = undefined;
       }
       if (unavailable() || waitingForReceipt()) return;
-      const files = (await readdir(dir))
-        .filter((file) => file.endsWith('.message'))
-        .sort()
-        .map((file) => join(dir, file));
+      const files =
+        pending?.files ??
+        (await readdir(dir))
+          .filter((file) => file.endsWith('.message'))
+          .sort()
+          .map((file) => join(dir, file));
       if (!files.length || unavailable()) return;
-      const messages = await Promise.all(files.map((file) => readFile(file, 'utf8')));
+      const batch = pending ?? {
+        files,
+        text: (await Promise.all(files.map((file) => readFile(file, 'utf8')))).join('\n\n'),
+        submitted: 0,
+        accepted: false,
+        retried: false,
+      };
       const current = await hc.get(address);
       if (
         unavailable() ||
@@ -120,9 +130,28 @@ export function registerHcMailbox(
         inboxPath(root, current) !== dir
       )
         return;
-      const text = messages.join('\n\n');
-      pending = { text, files, submitted: Date.now(), accepted: false };
-      pi.sendUserMessage(text, { deliverAs: 'followUp' });
+      if (batch.retried) {
+        // Set these reports aside so an unconfirmed batch cannot block later reports.
+        for (const file of batch.files) {
+          const unconfirmed = `${file}.unconfirmed`;
+          await rename(file, unconfirmed).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== 'ENOENT') throw error;
+            // An earlier scan may have moved this file before failing on another one.
+            return access(unconfirmed);
+          });
+        }
+        pending = undefined;
+        scanAgain = true;
+        ctx.ui.notify(
+          `HC inbox delivery was not confirmed after retrying. Reports are saved as .unconfirmed files in ${dir}.`,
+          'warning',
+        );
+        return;
+      }
+      batch.retried = pending !== undefined;
+      batch.submitted = Date.now();
+      pending = batch;
+      pi.sendUserMessage(batch.text, { deliverAs: 'followUp' });
     };
     const scan = () => {
       if (closed) return Promise.resolve();
@@ -131,7 +160,17 @@ export function registerHcMailbox(
         return running;
       }
       running = drain()
-        .catch(() => {})
+        .then(() => {
+          reportedScanError = false;
+        })
+        .catch((error: unknown) => {
+          if (closed || reportedScanError) return;
+          reportedScanError = true;
+          ctx.ui.notify(
+            `Could not process the HC inbox: ${error instanceof Error ? error.message : String(error)}`,
+            'warning',
+          );
+        })
         .finally(() => {
           running = undefined;
           if (scanAgain) {
@@ -163,10 +202,16 @@ export function registerHcMailbox(
         closed = true;
         clearInterval(timer);
         watcher?.close();
-        if (pending?.accepted || quit) {
+        if (quit) {
+          try {
+            await hc.command('label', ['--', address, `${inboxLabelKey}=`]);
+          } finally {
+            await running;
+            await rm(dir, { recursive: true, force: true });
+          }
+        } else {
           await running;
-          if (quit) await rm(dir, { recursive: true, force: true });
-          else if (pending?.accepted)
+          if (pending?.accepted)
             await Promise.all(pending.files.map((file) => rm(file, { force: true })));
         }
       },
