@@ -76,7 +76,7 @@ async function until(assert: () => boolean | Promise<boolean>, timeout = 1_000) 
   throw new Error('The mailbox did not reach the expected state in time');
 }
 
-test('a blocked parent batches reports in order and removes them after Pi receives the batch', async () => {
+test('a blocked parent batches reports in order and confirms delivery even if Pi changes the text', async () => {
   await withMailbox(async ({ emit, setStatus, queue, dir, submissions }) => {
     await emit('ui_prompt_start');
     expect(await queue('First child report')).toEqual({ sent: false, queued: true });
@@ -94,11 +94,14 @@ test('a blocked parent batches reports in order and removes them after Pi receiv
     await writeFile(join(dir, 'unfinished.tmp'), 'Partial data');
     await emit('ui_prompt_end');
     await until(() => submissions.length === 1);
-    const batch = 'First child report\n\nSecond child report';
-    expect(submissions).toEqual([[batch, { deliverAs: 'followUp' }]]);
+    const [batch, options] = submissions[0]!;
+    expect(batch).toMatch(
+      /^First child report\n\nSecond child report\n\n\[HC inbox batch [0-9a-f-]+\]$/,
+    );
+    expect(options).toEqual({ deliverAs: 'followUp' });
     expect(await readdir(dir)).toHaveLength(3);
     await emit('message_end', {
-      message: { role: 'user', content: [{ type: 'text', text: batch }] },
+      message: { role: 'user', content: [{ type: 'text', text: `Prefix\n${batch}\nSuffix` }] },
     });
     await until(async () => (await readdir(dir)).length === 1);
     expect(await readdir(dir)).toEqual(['unfinished.tmp']);
@@ -113,7 +116,7 @@ test('a report written after the prompt closes still wakes the parent', async ()
     setStatus('done');
     await queue('Late report');
     await until(() => submissions.length === 1);
-    expect(submissions).toEqual([['Late report', { deliverAs: 'followUp' }]]);
+    expect(submissions[0]?.[0]).toStartWith('Late report\n\n[HC inbox batch ');
   });
 });
 
@@ -127,7 +130,7 @@ test('an unreceived report survives /new and waits for a native dialog to clear'
     expect(submissions).toEqual([]);
     setStatus('idle');
     await until(() => submissions.length === 1, 3_000);
-    expect(submissions).toEqual([['Report across sessions', { deliverAs: 'followUp' }]]);
+    expect(submissions[0]?.[0]).toStartWith('Report across sessions\n\n[HC inbox batch ');
   });
 });
 
@@ -146,17 +149,16 @@ test('an unconfirmed batch retries once and leaves later reports free to deliver
       time += 31_000;
       await emit('agent_settled');
       await until(() => submissions.length === 2);
-      expect(submissions.map(([text]) => text)).toEqual([
-        'Unconfirmed report',
-        'Unconfirmed report',
-      ]);
+      expect(submissions[0]?.[0]).toStartWith('Unconfirmed report\n\n[HC inbox batch ');
+      expect(submissions[1]).toEqual(submissions[0]);
 
       time += 31_000;
       await emit('agent_settled');
       await until(() => submissions.length === 3);
-      expect(submissions[2]?.[0]).toBe('Later report');
-      expect(notifications).toEqual([expect.stringContaining('not confirmed after retrying')]);
-      await emit('message_end', { message: { role: 'user', content: 'Later report' } });
+      const later = submissions[2]?.[0];
+      expect(later).toStartWith('Later report\n\n[HC inbox batch ');
+      expect(notifications).toEqual([expect.stringContaining('until Pi exits normally')]);
+      await emit('message_end', { message: { role: 'user', content: later } });
       await until(async () => (await readdir(dir)).length === 1);
       const [file] = await readdir(dir);
       expect(file).toEndWith('.unconfirmed');

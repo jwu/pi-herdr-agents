@@ -993,6 +993,7 @@ test('hc_send queues a child report when the parent becomes blocked during deliv
   const dir = join(root, 't1-123');
   const target = { ...parent, created_ms: 123, labels: { [inboxLabelKey]: '1' } };
   let sends = 0;
+  let replaceParent = false;
   const invoke = register(
     async (_command, args) => {
       switch (args[0]) {
@@ -1002,6 +1003,7 @@ test('hc_send queues a child report when the parent becomes blocked during deliv
           return stdout(args.at(-1) === self.address ? self : target);
         case 'send':
           sends++;
+          if (replaceParent) target.created_ms++;
           target.status = { app: 'pi', state: 'blocked' };
           return { ...stdout({ reason: 'status_mismatch' }), code: 10 };
         default:
@@ -1029,6 +1031,17 @@ test('hc_send queues a child report when the parent becomes blocked during deliv
     delete (target.labels as Record<string, string>)[inboxLabelKey];
     await expect(invoke('hc_send', { message: 'Legacy parent' })).rejects.toThrow('t1 is blocked');
     expect(await readdir(dir)).toEqual(files);
+
+    target.labels[inboxLabelKey] = '1';
+    target.status = { app: 'pi', state: 'working' };
+    replaceParent = true;
+    const replacementDir = join(root, 't1-124');
+    await mkdir(replacementDir);
+    await expect(invoke('hc_send', { message: 'Report for the old parent' })).rejects.toThrow(
+      'The parent terminal t1 changed before the report could be queued.',
+    );
+    expect(await readdir(dir)).toEqual(files);
+    expect(await readdir(replacementDir)).toEqual([]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

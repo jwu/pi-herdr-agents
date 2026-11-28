@@ -3,6 +3,7 @@
 ## 0.9.0
 
 - Save child reports and automatic notices for a blocked local parent and deliver them when Pi can take input again.
+- Retry unconfirmed inbox batches once, then set the reports aside as `.unconfirmed` files and warn the parent.
 - `hc_send` without a target now fails with a clear error when the parent is on another machine, instead of reporting that it has no reachable parent.
 
 ## 0.8.0

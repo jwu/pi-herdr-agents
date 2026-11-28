@@ -30,24 +30,22 @@ export async function sendToParent(
     // (status mismatch), so the report can be queued instead.
     if (!(error instanceof HcError) || ![9, 10].includes(error.code)) throw error;
     const dir = inboxPath(root, parent);
+    if (!dir) throw error;
+    const current = await hc.get(parent.address);
+    if (inboxPath(root, current) !== dir) {
+      throw new Error(
+        `The parent terminal ${parent.address} changed before the report could be queued.`,
+      );
+    }
+    // A confirmed block can clear before this lookup. The inbox can deliver after it clears.
+    const recovered = error.code === 9 && canReceive(current);
     if (
-      parent.state !== 'live' ||
-      parent.status?.app !== 'pi' ||
-      !dir ||
-      parent.labels?.[inboxLabelKey] !== '1'
+      current.state !== 'live' ||
+      current.status?.app !== 'pi' ||
+      current.labels?.[inboxLabelKey] !== '1' ||
+      (current.status.state !== 'blocked' && !recovered)
     ) {
       throw error;
-    }
-    if (error.code === 10) {
-      // hc.send already retried once. Both mismatches guarantee that hc typed nothing.
-      const current = await hc.get(parent.address);
-      if (
-        current.created_ms !== parent.created_ms ||
-        current.state !== 'live' ||
-        current.status?.app !== 'pi' ||
-        current.status.state !== 'blocked'
-      )
-        throw error;
     }
     signal?.throwIfAborted();
     const id = `${(performance.timeOrigin + performance.now()).toFixed(3)}-${randomUUID()}`;
@@ -92,7 +90,14 @@ export function registerHcMailbox(
     let scanAgain = false;
     let reportedScanError = false;
     let pending:
-      | { text: string; files: string[]; submitted: number; accepted: boolean; retried: boolean }
+      | {
+          receipt: string;
+          text: string;
+          files: string[];
+          submitted: number;
+          accepted: boolean;
+          retried: boolean;
+        }
       | undefined;
     const unavailable = () => closed || prompts > 0;
     const waitingForReceipt = () =>
@@ -117,6 +122,7 @@ export function registerHcMailbox(
       if (!files.length || unavailable()) return;
       const batch = pending ?? {
         files,
+        receipt: `[HC inbox batch ${randomUUID()}]`,
         text: (await Promise.all(files.map((file) => readFile(file, 'utf8')))).join('\n\n'),
         submitted: 0,
         accepted: false,
@@ -143,7 +149,7 @@ export function registerHcMailbox(
         pending = undefined;
         scanAgain = true;
         ctx.ui.notify(
-          `HC inbox delivery was not confirmed after retrying. Reports are saved as .unconfirmed files in ${dir}.`,
+          `HC inbox delivery was not confirmed after retrying. Reports are saved as .unconfirmed files in ${dir} until Pi exits normally.`,
           'warning',
         );
         return;
@@ -151,7 +157,7 @@ export function registerHcMailbox(
       batch.retried = pending !== undefined;
       batch.submitted = Date.now();
       pending = batch;
-      pi.sendUserMessage(batch.text, { deliverAs: 'followUp' });
+      pi.sendUserMessage(`${batch.text}\n\n${batch.receipt}`, { deliverAs: 'followUp' });
     };
     const scan = () => {
       if (closed) return Promise.resolve();
@@ -194,7 +200,8 @@ export function registerHcMailbox(
     mailbox = {
       scan,
       acknowledge(text) {
-        if (pending?.text !== text) return;
+        // Match the receipt even if an input handler has wrapped or edited the report.
+        if (!pending || !text.includes(pending.receipt)) return;
         pending.accepted = true;
         void scan();
       },
