@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Save child reports and automatic notices for a blocked local parent and deliver them when Pi can take input again.
+
 ## 0.8.0
 
 - A child now tells its parent on its own when a run ends in an error after Pi's retries, with the error text, and when Pi waits on a dialog.

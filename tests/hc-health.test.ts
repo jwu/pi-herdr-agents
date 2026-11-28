@@ -1,23 +1,27 @@
 import { expect, test } from 'bun:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { registerHcHealth, runError } from '../extensions/hc-health.ts';
+import { inboxLabelKey } from '../extensions/hc-mailbox.ts';
 
 function stdout(data: unknown) {
   return { stdout: JSON.stringify(data), stderr: '', code: 0, killed: false, truncated: false };
 }
 
-function load(self: { address: string; name?: string; parent?: string | null }) {
+function load(
+  self: { address: string; name?: string; parent?: string | null },
+  parent = { address: 't1', state: 'live', status: { app: 'pi', state: 'working' } },
+  inboxRoot?: string,
+) {
   const handlers = new Map<string, (event: unknown) => unknown>();
   const sends: string[][] = [];
   registerHcHealth(
     {
       exec: async (_command: string, args: string[]) => {
         if (args[0] === 'get') {
-          return stdout(
-            args.at(-1) === self.address
-              ? { ...self, state: 'live' }
-              : { address: 't1', state: 'live', status: { app: 'pi', state: 'working' } },
-          );
+          return stdout(args.at(-1) === self.address ? { ...self, state: 'live' } : parent);
         }
         sends.push(args);
         return stdout({ started: true, turn: 3 });
@@ -25,6 +29,7 @@ function load(self: { address: string; name?: string; parent?: string | null }) 
       on: (name: string, handler: (event: unknown) => unknown) => handlers.set(name, handler),
     } as unknown as Pick<ExtensionAPI, 'exec' | 'on'>,
     self.address,
+    inboxRoot,
   );
   const emit = async (name: string, event: unknown = {}) => {
     await handlers.get(name)?.(event);
@@ -72,6 +77,30 @@ test('a child tells its parent when it waits on a dialog', async () => {
   const { emit, sends } = load({ address: 't5', name: 't5', parent: 't1' });
   await emit('ui_prompt_start', { kind: 'confirm', title: 'Trust this project?' });
   expect(sends[0]!.at(-1)).toContain('t5 is blocked on a confirm dialog: Trust this project?');
+});
+
+test('a child queues its final error notice when its parent is blocked', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'hc-health-inbox-'));
+  const dir = join(root, 't1-123');
+  const parent = {
+    address: 't1',
+    created_ms: 123,
+    state: 'live',
+    status: { app: 'pi', state: 'blocked' },
+    labels: { [inboxLabelKey]: '1' },
+  };
+  try {
+    await mkdir(dir);
+    const { emit, sends } = load({ address: 't5', parent: 't1' }, parent, root);
+    await emit('agent_end', { messages: [failed] });
+    await emit('agent_settled', { aborted: false });
+    expect(sends).toHaveLength(0);
+    const files = await readdir(dir);
+    expect(files).toHaveLength(1);
+    expect(await readFile(join(dir, files[0]!), 'utf8')).toContain('t5 stopped with an error');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('a root and a child of a remote parent report nothing', async () => {

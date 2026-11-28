@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { HcClient } from './hc-client.ts';
 import { messagePrefix } from './hc-inbox.ts';
+import { sendToParent } from './hc-mailbox.ts';
 
 const maxErrorLength = 2_000;
 
@@ -26,7 +27,11 @@ export function runError(messages: readonly unknown[]) {
  * extension still runs, so it tells the parent when a run ends in an error or Pi waits on a
  * dialog. A root has no parent and reports nothing.
  */
-export function registerHcHealth(pi: Pick<ExtensionAPI, 'exec' | 'on'>, address: string) {
+export function registerHcHealth(
+  pi: Pick<ExtensionAPI, 'exec' | 'on'>,
+  address: string,
+  inboxRoot?: string,
+) {
   const hc = new HcClient(pi.exec.bind(pi));
   let self: Promise<{ name: string; parent: string } | null> | undefined;
   const lookup = () =>
@@ -45,9 +50,11 @@ export function registerHcHealth(pi: Pick<ExtensionAPI, 'exec' | 'on'>, address:
     if (!me) return;
     const label = me.name === address ? address : `${address} (${me.name})`;
     try {
-      await hc.send(
+      await sendToParent(
+        hc,
         await hc.get(me.parent),
         `${messagePrefix} ${address}:\n\n[Automatic notice from the pi-herdr-agents extension] ${label} ${news}`,
+        inboxRoot,
       );
     } catch {
       // The parent is gone or cannot take input. hc still shows the child's status.

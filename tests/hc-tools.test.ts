@@ -5,10 +5,11 @@ import type {
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { parseAgentProfile } from '@johnnywu/pi-agent-profiles';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { childPiArgs } from '../extensions/agent-profiles.ts';
+import { inboxLabelKey } from '../extensions/hc-mailbox.ts';
 import { childSessionDir, registerHcTools } from '../extensions/hc-tools.ts';
 
 const workspace = process.cwd();
@@ -26,7 +27,12 @@ const delegationTools = 'hc_subagent,hc_renew,hc_read,hc_stop,hc_rm';
 const childSessionSlug = (cwd: string) =>
   `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
 
-function register(exec: ExtensionAPI['exec'], cwd = workspace, sessionDir = '') {
+function register(
+  exec: ExtensionAPI['exec'],
+  cwd = workspace,
+  sessionDir = '',
+  inboxRoot?: string,
+) {
   const tools = new Map<string, ToolDefinition>();
   registerHcTools(
     {
@@ -37,6 +43,8 @@ function register(exec: ExtensionAPI['exec'], cwd = workspace, sessionDir = '') 
     },
     self.address,
     '/package/extensions/index.ts',
+    undefined,
+    inboxRoot,
   );
   return (name: string, params: Record<string, unknown>) =>
     tools.get(name)!.execute('test', params, undefined, undefined, {
@@ -978,6 +986,52 @@ test('hc_subagent stops waiting when the child reports an error', async () => {
     (await invoke('hc_subagent', { name: 'review', task: 'Review the change' })).details,
   ).toMatchObject({ first_message: { sent: false, reason: expect.stringContaining('error') } });
   expect(gets).toBe(1);
+});
+
+test('hc_send queues a child report when the parent becomes blocked during delivery', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'hc-tools-inbox-'));
+  const dir = join(root, 't1-123');
+  const target = { ...parent, created_ms: 123, labels: { [inboxLabelKey]: '1' } };
+  let sends = 0;
+  const invoke = register(
+    async (_command, args) => {
+      switch (args[0]) {
+        case 'ls':
+          return stdout({ terminals: [] });
+        case 'get':
+          return stdout(args.at(-1) === self.address ? self : target);
+        case 'send':
+          sends++;
+          target.status = { app: 'pi', state: 'blocked' };
+          return { ...stdout({ reason: 'status_mismatch' }), code: 10 };
+        default:
+          throw new Error(`Unexpected ${args[0]}`);
+      }
+    },
+    workspace,
+    '',
+    root,
+  );
+  try {
+    await mkdir(dir);
+    expect((await invoke('hc_send', { message: 'Review finished' })).details).toEqual({
+      target: 't1',
+      queued: true,
+      sent: false,
+    });
+    expect(sends).toBe(1);
+    const files = await readdir(dir);
+    expect(files).toHaveLength(1);
+    expect(await readFile(join(dir, files[0]!), 'utf8')).toBe(
+      'HC agent message from t2:\n\nReview finished',
+    );
+
+    delete (target.labels as Record<string, string>)[inboxLabelKey];
+    await expect(invoke('hc_send', { message: 'Legacy parent' })).rejects.toThrow('t1 is blocked');
+    expect(await readdir(dir)).toEqual(files);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('hc_send tells the parent when a sibling cannot take a message', async () => {

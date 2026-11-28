@@ -37,7 +37,7 @@ Children store their Pi sessions in an `hc-children` subdirectory, so they stay 
 
 ## Automatic notices
 
-A child whose model fails cannot report with `hc_send`, and parents do not poll. The extension in each child therefore messages its parent on its own when a run ends in an error after Pi's own retries (with the error text, such as a content filter refusal), and when Pi opens a dialog and waits on it. A root, or a child whose parent is on another machine, sends no notices.
+A child whose model fails cannot report with `hc_send`, and parents do not poll. The extension in each child therefore messages its parent on its own when a run ends in an error after Pi's own retries (with the error text, such as a content filter refusal), and when Pi opens a dialog and waits on it. These notices use the same inbox as `hc_send` when a local parent is blocked. A root, or a child whose parent is on another machine, sends no notices.
 
 ## Tools
 
@@ -83,7 +83,9 @@ The `pi-herdr-agents.session` label, updated at each session start, lets `hc_ren
 
 Send a message to the parent, a direct child, a sibling, or a peer. An idle recipient starts a turn with it. A working recipient handles it by sender: a message from its parent steers the current run, arriving after the running tool calls finish. Messages from children, siblings, and peers are queued as follow-ups, which arrive once the run has no more tool calls, so reports do not interrupt the work in progress.
 
-When a message to a sibling cannot be delivered, for example because the sibling is in `error`, the tool fails and the extension also tells the parent, so the sender is not the only one who knows.
+A blocked local parent running this version accepts child reports into its on-disk inbox. `hc_send` returns `{"queued": true, "sent": false}` after saving the report. The parent delivers queued reports in a batch when Pi can take input again. They follow the terminal across `/new`. Queued reports need no retry.
+
+When a message to a sibling cannot be delivered, for example because the sibling is in `error`, the tool fails and the extension also tells the parent.
 
 | Parameter | Description |
 | --- | --- |

@@ -19,6 +19,7 @@ interface ListedTerminal {
 }
 
 export interface Terminal extends Omit<ListedTerminal, 'status'> {
+  created_ms?: number;
   status?: { app?: string; state: string } | null;
   labels?: Record<string, string>;
 }
@@ -53,7 +54,7 @@ export class HcError extends Error {
   }
 }
 
-function canReceive(terminal: Terminal) {
+export function canReceive(terminal: Terminal) {
   return (
     terminal.state === 'live' &&
     terminal.status?.app === 'pi' &&
@@ -151,9 +152,15 @@ export class HcClient {
 
   private deliver(terminal: Terminal, message: string) {
     if (!canReceive(terminal)) {
-      throw new Error(
-        `${terminal.address} is ${terminal.status?.state ?? terminal.state} and is not ready for Pi input. Check its terminal before retrying.`,
-      );
+      const reason = `${terminal.address} is ${terminal.status?.state ?? terminal.state} and is not ready for Pi input. Check its terminal before retrying.`;
+      if (
+        terminal.state === 'live' &&
+        terminal.status?.app === 'pi' &&
+        terminal.status.state === 'blocked'
+      ) {
+        throw new HcError(9, reason);
+      }
+      throw new Error(reason);
     }
     // hc can atomically guard against a status change for these two states.
     const state = terminal.status?.state;
