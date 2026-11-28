@@ -994,6 +994,7 @@ test('hc_send queues a child report when the parent becomes blocked during deliv
   const target = { ...parent, created_ms: 123, labels: { [inboxLabelKey]: '1' } };
   let sends = 0;
   let replaceParent = false;
+  let flap = false;
   const invoke = register(
     async (_command, args) => {
       switch (args[0]) {
@@ -1004,7 +1005,10 @@ test('hc_send queues a child report when the parent becomes blocked during deliv
         case 'send':
           sends++;
           if (replaceParent) target.created_ms++;
-          target.status = { app: 'pi', state: 'blocked' };
+          target.status = {
+            app: 'pi',
+            state: flap ? (target.status.state === 'working' ? 'idle' : 'working') : 'blocked',
+          };
           return { ...stdout({ reason: 'status_mismatch' }), code: 10 };
         default:
           throw new Error(`Unexpected ${args[0]}`);
@@ -1042,6 +1046,18 @@ test('hc_send queues a child report when the parent becomes blocked during deliv
     );
     expect(await readdir(dir)).toEqual(files);
     expect(await readdir(replacementDir)).toEqual([]);
+
+    target.status = { app: 'pi', state: 'working' };
+    replaceParent = false;
+    flap = true;
+    const beforeFlap = sends;
+    expect((await invoke('hc_send', { message: 'Report during status changes' })).details).toEqual({
+      target: 't1',
+      queued: true,
+      sent: false,
+    });
+    expect(sends - beforeFlap).toBe(2);
+    expect(await readdir(replacementDir)).toHaveLength(1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

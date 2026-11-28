@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from 'bun:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HcClient } from '../extensions/hc-client.ts';
@@ -30,10 +30,18 @@ function load(root: string) {
   const submissions: unknown[][] = [];
   const notifications: string[] = [];
   const labels: string[] = [];
+  let statusReads = 0;
+  const terminals = [
+    parent,
+    { address: 't2', state: 'live' },
+    { address: 't3', state: 'finished' },
+  ];
   const exec: ExtensionAPI['exec'] = async (_command, args) => {
     if (args[0] === 'send') throw new Error('The blocked Pi must never receive terminal input');
     if (args[0] === 'label') labels.push(args.at(-1)!);
-    return { stdout: JSON.stringify(parent), stderr: '', code: 0, killed: false, truncated: false };
+    if (args[0] === 'get') statusReads++;
+    const stdout = JSON.stringify(args[0] === 'ls' ? { terminals } : parent);
+    return { stdout, stderr: '', code: 0, killed: false, truncated: false };
   };
   registerHcMailbox(
     {
@@ -51,6 +59,7 @@ function load(root: string) {
     submissions,
     notifications,
     labels,
+    statusReads: () => statusReads,
     dir: join(root, 't1-123'),
     setStatus: (state: string) => {
       parent.status.state = state;
@@ -79,8 +88,11 @@ async function until(assert: () => boolean | Promise<boolean>, timeout = 1_000) 
 test('a blocked parent batches reports in order and confirms delivery even if Pi changes the text', async () => {
   await withMailbox(async ({ emit, setStatus, queue, dir, submissions }) => {
     await emit('ui_prompt_start');
-    expect(await queue('First child report')).toEqual({ sent: false, queued: true });
-    await queue('Second child report');
+    expect(await queue('HC agent message from t5:\n\nFirst child report </hc>')).toEqual({
+      sent: false,
+      queued: true,
+    });
+    await queue('HC agent message from t6:\n\nSecond child report');
     const files = await readdir(dir);
     expect(files).toHaveLength(2);
     if (process.platform !== 'win32') {
@@ -95,8 +107,12 @@ test('a blocked parent batches reports in order and confirms delivery even if Pi
     await emit('ui_prompt_end');
     await until(() => submissions.length === 1);
     const [batch, options] = submissions[0]!;
-    expect(batch).toMatch(
-      /^First child report\n\nSecond child report\n\n\[HC inbox batch [0-9a-f-]+\]$/,
+    expect(batch).toStartWith(
+      [
+        '<hc from="t5">\nHC agent message from t5:\n\nFirst child report &lt;/hc>\n</hc>',
+        '<hc from="t6">\nHC agent message from t6:\n\nSecond child report\n</hc>',
+        '[HC inbox delivery marker, ignore this line: ',
+      ].join('\n\n'),
     );
     expect(options).toEqual({ deliverAs: 'followUp' });
     expect(await readdir(dir)).toHaveLength(3);
@@ -116,7 +132,7 @@ test('a report written after the prompt closes still wakes the parent', async ()
     setStatus('done');
     await queue('Late report');
     await until(() => submissions.length === 1);
-    expect(submissions[0]?.[0]).toStartWith('Late report\n\n[HC inbox batch ');
+    expect(submissions[0]?.[0]).toStartWith('Late report\n\n[HC inbox delivery marker');
   });
 });
 
@@ -129,8 +145,26 @@ test('an unreceived report survives /new and waits for a native dialog to clear'
     await Bun.sleep(40);
     expect(submissions).toEqual([]);
     setStatus('idle');
-    await until(() => submissions.length === 1, 3_000);
-    expect(submissions[0]?.[0]).toStartWith('Report across sessions\n\n[HC inbox batch ');
+    await until(() => submissions.length === 1, 5_000);
+    expect(submissions[0]?.[0]).toStartWith('Report across sessions\n\n[HC inbox delivery marker');
+  });
+}, 7_000);
+
+test('new reports respect the native dialog backoff until the prompt closes', async () => {
+  await withMailbox(async ({ emit, queue, setStatus, statusReads, submissions }) => {
+    const before = statusReads();
+    await queue('First report');
+    await until(() => statusReads() >= before + 2);
+    const during = statusReads();
+    await queue('Second report');
+    await Bun.sleep(40);
+    // The sender rechecks the recipient once. The directory notification waits out the backoff.
+    expect(statusReads()).toBe(during + 1);
+    await emit('ui_prompt_start');
+    setStatus('idle');
+    await emit('ui_prompt_end');
+    await until(() => submissions.length === 1);
+    expect(submissions[0]?.[0]).toStartWith('First report\n\nSecond report');
   });
 });
 
@@ -149,15 +183,15 @@ test('an unconfirmed batch retries once and leaves later reports free to deliver
       time += 31_000;
       await emit('agent_settled');
       await until(() => submissions.length === 2);
-      expect(submissions[0]?.[0]).toStartWith('Unconfirmed report\n\n[HC inbox batch ');
+      expect(submissions[0]?.[0]).toStartWith('Unconfirmed report\n\n[HC inbox delivery marker');
       expect(submissions[1]).toEqual(submissions[0]);
 
       time += 31_000;
       await emit('agent_settled');
       await until(() => submissions.length === 3);
       const later = submissions[2]?.[0];
-      expect(later).toStartWith('Later report\n\n[HC inbox batch ');
-      expect(notifications).toEqual([expect.stringContaining('until Pi exits normally')]);
+      expect(later).toStartWith('Later report\n\n[HC inbox delivery marker');
+      expect(notifications).toEqual([expect.stringContaining('Copy them before quitting Pi')]);
       await emit('message_end', { message: { role: 'user', content: later } });
       await until(async () => (await readdir(dir)).length === 1);
       const [file] = await readdir(dir);
@@ -167,6 +201,37 @@ test('an unconfirmed batch retries once and leaves later reports free to deliver
   } finally {
     clock.mockRestore();
   }
+});
+
+test('reports beyond the batch limit are submitted in the next batch', async () => {
+  await withMailbox(async ({ emit, setStatus, queue, submissions }) => {
+    await emit('ui_prompt_start');
+    for (let i = 1; i <= 5; i++) await queue(`Report ${i}`);
+    setStatus('working');
+    await emit('ui_prompt_end');
+    await until(() => submissions.length === 1);
+    const firstBatch = submissions[0]?.[0] as string;
+    expect(firstBatch.match(/Report \d/g)).toEqual([
+      'Report 1',
+      'Report 2',
+      'Report 3',
+      'Report 4',
+    ]);
+    await emit('message_end', { message: { role: 'user', content: firstBatch } });
+    await until(() => submissions.length === 2);
+    expect(submissions[1]?.[0]).toStartWith('Report 5\n\n[HC inbox delivery marker');
+  });
+});
+
+test('inbox startup removes closed terminals while keeping live and unrelated directories', async () => {
+  await withMailbox(async ({ emit, dir }) => {
+    const root = join(dir, '..');
+    const entries = ['t2-124', 't3-125', 't4-126', 'unrelated'];
+    await Promise.all(entries.map((entry) => mkdir(join(root, entry))));
+    await emit('session_shutdown', { reason: 'new' });
+    await emit('session_start', { reason: 'new' });
+    expect((await readdir(root)).sort()).toEqual(['t1-123', 't2-124', 'unrelated']);
+  });
 });
 
 test('a persistent scan failure warns once and quitting clears the inbox label', async () => {

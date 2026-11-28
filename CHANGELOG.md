@@ -3,7 +3,8 @@
 ## 0.9.0
 
 - Save child reports and automatic notices for a blocked local parent and deliver them when Pi can take input again.
-- Retry unconfirmed inbox batches once, then set the reports aside as `.unconfirmed` files and warn the parent.
+- Keep sender addresses on queued reports, deliver at most four reports at a time, and retry each unconfirmed batch once before setting it aside with a warning.
+- Check blocked terminals less often during native dialogs and clean up inboxes for closed terminals at startup.
 - `hc_send` without a target now fails with a clear error when the parent is on another machine, instead of reporting that it has no reachable parent.
 
 ## 0.8.0

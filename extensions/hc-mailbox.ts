@@ -5,11 +5,49 @@ import { access, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { canReceive, HcClient, HcError, type Terminal } from './hc-client.ts';
+import { hcSender } from './hc-inbox.ts';
 
 export const inboxLabelKey = 'pi-herdr-agents.inbox';
 const inboxRoot = join(homedir(), '.pi', 'herdr-inbox');
 const scanInterval = 2_000;
+const maxStatusDelay = 30_000;
+const maxBatchReports = 4;
 const retryAfter = 30_000;
+
+async function coreInboxRoot(hc: HcClient) {
+  const { core } = await hc.command<{ core: { id: string } }>('server', ['status']);
+  if (!/^[a-f0-9]{32}$/.test(core.id)) throw new Error('Herdr Core returned an invalid ID.');
+  return join(inboxRoot, core.id);
+}
+
+async function pruneClosedInboxes(hc: HcClient, root: string, ownInbox: string, address: string) {
+  const entries = (await readdir(root, { withFileTypes: true })).filter(
+    (entry) => entry.isDirectory() && join(root, entry.name) !== ownInbox,
+  );
+  if (!entries.length) return;
+  const { terminals } = await hc.command<{ terminals: { address: string; state: string }[] }>(
+    'ls',
+    [],
+  );
+  const live = new Set(
+    terminals.filter(({ state }) => state === 'live').map(({ address }) => address),
+  );
+  if (!live.has(address)) return;
+  // A live terminal can keep its address even if its Pi process exits. Keep its inbox for a restart.
+  for (const { name } of entries) {
+    const terminal = /^([a-zA-Z0-9_-]+)-\d+$/.exec(name)?.[1];
+    if (terminal && !live.has(terminal))
+      await rm(join(root, name), { recursive: true, force: true });
+  }
+}
+
+function formatReport(report: string) {
+  const sender = hcSender(report);
+  if (!sender) return report;
+  // Keep embedded tag-like text inside the report's own envelope.
+  const body = report.replace(/<\/?hc(?=[\s>])/g, (tag) => `&lt;${tag.slice(1)}`);
+  return `<hc from="${sender}">\n${body}\n</hc>`;
+}
 
 function inboxPath(root: string, { address, created_ms }: Terminal) {
   if (!/^[a-zA-Z0-9_-]+$/.test(address) || !Number.isSafeInteger(created_ms)) return;
@@ -20,7 +58,7 @@ export async function sendToParent(
   hc: HcClient,
   parent: Terminal,
   message: string,
-  root = inboxRoot,
+  root?: string,
   signal?: AbortSignal,
 ) {
   try {
@@ -29,24 +67,23 @@ export async function sendToParent(
     // hc typed nothing on code 9 (blocked, from hc or the local status check) or code 10
     // (status mismatch), so the report can be queued instead.
     if (!(error instanceof HcError) || ![9, 10].includes(error.code)) throw error;
-    const dir = inboxPath(root, parent);
-    if (!dir) throw error;
     const current = await hc.get(parent.address);
-    if (inboxPath(root, current) !== dir) {
+    if (current.address !== parent.address || current.created_ms !== parent.created_ms) {
       throw new Error(
         `The parent terminal ${parent.address} changed before the report could be queued.`,
       );
     }
-    // A confirmed block can clear before this lookup. The inbox can deliver after it clears.
-    const recovered = error.code === 9 && canReceive(current);
+    // The inbox can deliver if the same parent has already recovered from the failed send.
     if (
       current.state !== 'live' ||
       current.status?.app !== 'pi' ||
       current.labels?.[inboxLabelKey] !== '1' ||
-      (current.status.state !== 'blocked' && !recovered)
+      (current.status.state !== 'blocked' && !canReceive(current))
     ) {
       throw error;
     }
+    const dir = inboxPath(root ?? (await coreInboxRoot(hc)), current);
+    if (!dir) throw error;
     signal?.throwIfAborted();
     const id = `${(performance.timeOrigin + performance.now()).toFixed(3)}-${randomUUID()}`;
     const temporary = join(dir, `${id}.tmp`);
@@ -67,13 +104,13 @@ export async function sendToParent(
 export function registerHcMailbox(
   pi: Pick<ExtensionAPI, 'exec' | 'on' | 'sendUserMessage'>,
   address: string,
-  root = inboxRoot,
+  inboxBase?: string,
 ) {
   const hc = new HcClient(pi.exec.bind(pi));
   let prompts = 0;
   let mailbox:
     | {
-        scan: () => Promise<void>;
+        wake: () => void;
         acknowledge: (text: string) => void;
         close: (quit: boolean) => Promise<void>;
       }
@@ -81,6 +118,7 @@ export function registerHcMailbox(
 
   pi.on('session_start', async (_event, ctx) => {
     if (!ctx.hasUI) return;
+    const root = inboxBase ?? (await coreInboxRoot(hc));
     const dir = inboxPath(root, await hc.get(address));
     if (!dir) return;
     await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -89,6 +127,8 @@ export function registerHcMailbox(
     let running: Promise<void> | undefined;
     let scanAgain = false;
     let reportedScanError = false;
+    let statusDelay = scanInterval;
+    let checkStatusAfter = 0;
     let pending:
       | {
           receipt: string;
@@ -112,30 +152,34 @@ export function registerHcMailbox(
         await Promise.all(pending.files.map((file) => rm(file, { force: true })));
         pending = undefined;
       }
-      if (unavailable() || waitingForReceipt()) return;
+      if (unavailable() || waitingForReceipt() || Date.now() < checkStatusAfter) return;
       const files =
         pending?.files ??
         (await readdir(dir))
           .filter((file) => file.endsWith('.message'))
           .sort()
+          .slice(0, maxBatchReports)
           .map((file) => join(dir, file));
       if (!files.length || unavailable()) return;
+      const current = await hc.get(address);
+      if (unavailable() || waitingForReceipt() || inboxPath(root, current) !== dir) return;
+      if (!canReceive(current)) {
+        checkStatusAfter = Date.now() + statusDelay;
+        statusDelay = Math.min(statusDelay * 2, maxStatusDelay);
+        return;
+      }
+      statusDelay = scanInterval;
       const batch = pending ?? {
         files,
-        receipt: `[HC inbox batch ${randomUUID()}]`,
-        text: (await Promise.all(files.map((file) => readFile(file, 'utf8')))).join('\n\n'),
+        receipt: `[HC inbox delivery marker, ignore this line: ${randomUUID()}]`,
+        text: (await Promise.all(files.map((file) => readFile(file, 'utf8'))))
+          .map(formatReport)
+          .join('\n\n'),
         submitted: 0,
         accepted: false,
         retried: false,
       };
-      const current = await hc.get(address);
-      if (
-        unavailable() ||
-        waitingForReceipt() ||
-        !canReceive(current) ||
-        inboxPath(root, current) !== dir
-      )
-        return;
+      if (unavailable() || waitingForReceipt()) return;
       if (batch.retried) {
         // Set these reports aside so an unconfirmed batch cannot block later reports.
         for (const file of batch.files) {
@@ -149,7 +193,7 @@ export function registerHcMailbox(
         pending = undefined;
         scanAgain = true;
         ctx.ui.notify(
-          `HC inbox delivery was not confirmed after retrying. Reports are saved as .unconfirmed files in ${dir} until Pi exits normally.`,
+          `HC inbox delivery was not confirmed after retrying. Reports are saved as .unconfirmed files in ${dir}. Copy them before quitting Pi normally.`,
           'warning',
         );
         return;
@@ -198,7 +242,11 @@ export function registerHcMailbox(
     }
     const timer = setInterval(() => void scan(), scanInterval).unref();
     mailbox = {
-      scan,
+      wake() {
+        statusDelay = scanInterval;
+        checkStatusAfter = 0;
+        void scan();
+      },
       acknowledge(text) {
         // Match the receipt even if an input handler has wrapped or edited the report.
         if (!pending || !text.includes(pending.receipt)) return;
@@ -225,6 +273,12 @@ export function registerHcMailbox(
     };
     await hc.command('label', ['--', address, `${inboxLabelKey}=1`]);
     void scan();
+    await pruneClosedInboxes(hc, root, dir, address).catch((error: unknown) => {
+      ctx.ui.notify(
+        `Could not clean up closed HC inboxes: ${error instanceof Error ? error.message : String(error)}`,
+        'warning',
+      );
+    });
   });
 
   pi.on('ui_prompt_start', () => {
@@ -232,10 +286,10 @@ export function registerHcMailbox(
   });
   pi.on('ui_prompt_end', () => {
     prompts = Math.max(0, prompts - 1);
-    void mailbox?.scan();
+    mailbox?.wake();
   });
   pi.on('agent_settled', () => {
-    void mailbox?.scan();
+    mailbox?.wake();
   });
   pi.on('message_end', ({ message }) => {
     if (message.role !== 'user') return;
